@@ -1,0 +1,12 @@
+; RML pseudo-instructions
+
+EMT:    macro trap
+        RST 30H
+        DEFB trap
+        endm
+
+; '-1' instead of '-2' because we're generating displacement from second byte already
+CALR:   macro label
+        RST 28H
+        DEFB label-\$-1
+        endm

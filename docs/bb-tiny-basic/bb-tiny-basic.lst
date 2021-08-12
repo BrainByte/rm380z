@@ -1,0 +1,1937 @@
+# File bb-tiny-basic.asm
+0000			 
+0000			EMT:    MACRO trap 
+0000			        RST 30H 
+0000			        DEFB trap 
+0000			        ENDM 
+0000			 
+0000			; '-1' instead of '-2' because we're generating displacement from second byte already 
+0000			CALR:   MACRO label 
+0000			        RST 28H 
+0000			        DEFB label-$-1 
+0000			        ENDM 
+0000			 
+0000			DWA:    MACRO WHERE 
+0000			        DB   (WHERE >> 8) + 128 
+0000			        DB   WHERE & 0FFH 
+0000			        ENDM 
+0000			 
+0000			;************************************************************* 
+0000			; TINY BASIC 
+0000			;************************************************************* 
+0000			        ORG 0x2000 
+2000			 
+2000			;DISPATCH TABLE FOR TRAP CODES 11 TO 24 
+2000			 
+2000			OPNWT:  EQU     11 
+2000			CLOSE:  EQU     12 
+2000			GRAFIX: EQU     13 
+2000			SCROLL: EQU     14 
+2000			CLEAR:  EQU     15 
+2000			EDGE:   EQU     16 
+2000			GETSYN: EQU     17 
+2000			UPDATE: EQU     18 
+2000			GETHEX: EQU     19 
+2000			DEOUT:  EQU     20 
+2000			BYTEO:  EQU     21 
+2000			OUTC:   EQU     22 
+2000			MSG:    EQU     23 
+2000			CHAN:   EQU     24 
+2000			 
+2000			TINYBASIC: 
+2000			        EMT CLEAR 
+2000 f7			        RST 30H 
+2001 0f			        DEFB CLEAR 
+2002			        ENDM 
+# End of macro EMT
+2002 3e 0d		        LD A,CR 
+2004			        EMT OUTC 
+2004 f7			        RST 30H 
+2005 16			        DEFB OUTC 
+2006			        ENDM 
+# End of macro EMT
+2006 21 dd 27		        LD HL,BASV              ;OUTPUT VERSION 
+2009			        EMT MSG 
+2009 f7			        RST 30H 
+200a 17			        DEFB MSG 
+200b			        ENDM 
+# End of macro EMT
+200b			;        EMT 0 
+200b			 
+200b			SPACE:  EQU     20H             ; Space 
+200b			TAB:    EQU     09H             ; HORIZONTAL TAB 
+200b			CTRLC:  EQU     03H             ; Control "C" 
+200b			CTRLG:  EQU     07H             ; Control "G" 
+200b			BKSP:   EQU     08H             ; Back space 
+200b			LF:     EQU     0AH             ; Line feed 
+200b			CS:     EQU     0CH             ; Clear screen 
+200b			CR:     EQU     0DH             ; Carriage return 
+200b			FORM:   EQU     0CH             ; Form Feed 
+200b			CTRLO:  EQU     0FH             ; Control "O" 
+200b			CTRLQ:  EQU     11H             ; Control "Q" 
+200b			CTRLR:  EQU     12H             ; Control "R" 
+200b			CTRLS:  EQU     13H             ; Control "S" 
+200b			CTRLU:  EQU     15H             ; Control "U" 
+200b			ESC:    EQU     1BH             ; Escape 
+200b			DEL:    EQU     7FH             ; Delete 
+200b			 
+200b			;BSTACK: EQU     0FFFFH           ; STACK 
+200b			BSTACK: EQU     65000           ; STACK 
+200b			;OCSW:   EQU     8000H          ;SWITCH FOR OUTPUT 
+200b			OCSW:   EQU     18500            ;SWITCH FOR OUTPUT ( ROM LOADS AT 0x2000 + length 0x2860 ) 
+200b			CURRNT: EQU     OCSW+1          ;POINTS FOR OUTPUT 
+200b			STKGOS: EQU     OCSW+3          ;SAVES SP IN 'GOSUB' 
+200b			VARNXT: EQU     OCSW+5          ;TEMP STORAGE 
+200b			STKINP: EQU     OCSW+7          ;SAVES SP IN 'INPUT' 
+200b			LOPVAR: EQU     OCSW+9          ;'FOR' LOOP SAVE AREA 
+200b			LOPINC: EQU     OCSW+11         ;INCREMENT 
+200b			LOPLMT: EQU     OCSW+13         ;LIMIT 
+200b			LOPLN:  EQU     OCSW+15         ;LINE NUMBER 
+200b			LOPPT:  EQU     OCSW+17         ;TEXT POINTER 
+200b			RANPNT: EQU     OCSW+19         ;RANDOM NUMBER POINTER 
+200b			TXTUNF: EQU     OCSW+21         ;->UNFILLED TEXT AREA 
+200b			TXTBGN: EQU     OCSW+23         ;TEXT SAVE AREA BEGINS 
+200b			;TXTEND: EQU     FF00H         ;TEXT SAVE AREA ENDS 
+200b			TXTEND: EQU     65280          ;TEXT SAVE AREA ENDS 
+200b			KBDIN:  EQU     2 
+200b			 
+200b			;************************************************************* 
+200b			; *** ZERO PAGE SUBROUTINES *** 
+200b			; 
+200b			; THE Z80 INSTRUCTION SET ALLOWS FOR 8 ROUTINES IN LOW MEMORY 
+200b			; THAT MAY BE CALLED BY RST 00H, 08H, 10H, 18H, 20H, 28H, 30H, 
+200b			; AND 38H.  THIS IS A ONE BYTE INSTRUCTION, AND IS FUNCTIONALLY 
+200b			; SIMILAR TO THE THREE BYTE INSTRUCTION 'CALL XXXX'. TINY BASIC 
+200b			; WILL USE THE RST INSTRUCTION FOR THE 7 MOST FREQUENTLY USED 
+200b			; SUBROUTINES. TWO OTHER SUBROUTINES (CRLF & TSTNUM) ARE ALSO 
+200b			; IN THIS SECTION. THEY CAN BE REACHED WITH 'CALL'. 
+200b			;************************************************************* 
+200b			 
+200b 31 e8 fd		BSTART: LD SP,BSTACK                    ;*** COLD START *** 
+200e 3e ff		        LD A,0FFH 
+2010			        ;LD A,0H 
+2010 32 44 48		        LD (OCSW),A 
+2013 c3 9e 26		        JP BINIT 
+2016			 
+2016 e3			BRST08: EX (SP),HL                      ;*** TSTC OR RST 08H *** 
+2017 cd 39 20		        CALL BRST28                     ;IGNORE BLANKS AND 
+201a be			        CP (HL)                         ;TEST CHARACTER 
+201b c3 7d 20		        JP TC1                          ;REST OF THIS IS AT TC1 
+201e c9			        RET 
+201f			 
+201f f5			BRST10: PUSH AF                         ;*** OUTC OR RST 10H *** 
+2020 3a 44 48		        LD A,(OCSW)                     ;PRINT CHARACTER ONLY 
+2023 b7			        OR A                            ;IF OCSW SWITCH IS ON 
+2024 c3 c3 26		        JP BOUTC			            ;REST OF THIS AT OUTC 
+2027 c9			        RET 
+2028			 
+2028 cd ac 23		BRST18: CALL EXPR2                      ;*** EXPR OR RST 18H *** 
+202b e5			        PUSH HL                         ;EVALUATE AN EXPRESSION 
+202c c3 68 23		        JP EXPR1                        ;REST OF IT AT EXPR1 
+202f ..			        DM 'W' 
+2030 c9			        RET 
+2031			 
+2031 7c			BRST20: LD A,H                          ;*** COMP OR RST 20H *** 
+2032 ba			        CP D                            ;COMPARE HL WITH DE 
+2033 c0			        RET NZ                          ;RETURN CORRECT C AND 
+2034 7d			        LD A,L                          ;Z FLAGS 
+2035 bb			        CP E                            ;BUT OLD A IS LOST 
+2036 c9			        RET 
+2037 ..			        DM 'AN' 
+2039			 
+2039			SS1: 
+2039 1a			BRST28: LD A,(DE)                       ;*** IGNBLK/RST 28H *** 
+203a fe 20		        CP 20H                          ;IGNORE BLANKS 
+203c c0			        RET NZ                          ;IN TEXT (WHERE DE->) 
+203d 13			        INC DE                          ;AND RETURN THE FIRST 
+203e c3 39 20		        JP SS1                          ;NON-BLANK CHAR. IN A 
+2041 c9			        RET 
+2042			 
+2042 f1			BRST30: POP AF                          ;*** FINISH/RST 30H *** 
+2043 cd 02 25		        CALL FIN                        ;CHECK END OF COMMAND 
+2046 c3 1b 25		        JP QWHAT                        ;PRINT "WHAT?" IF WRONG 
+2049 ..			        DM 'G' 
+204a c9			        RET 
+204b			 
+204b cd 39 20		BRST38: CALL BRST28                     ;*** TSTV OR RST 38H *** 
+204e d6 40		        SUB 40H                         ;TEST VARIABLES 
+2050 d8			        RET C                           ;C:NOT A VARIABLE 
+2051 20 1a		        JR NZ,TV1                       ;NOT "@" ARRAY 
+2053 13			        INC DE                          ;IT IS THE "@" ARRAY 
+2054 cd 5b 24		        CALL PARN                       ;@ SHOULD BE FOLLOWED 
+2057 29			        ADD HL,HL                       ;BY (EXPR) AS ITS INDEX 
+2058 38 5a		        JR C,QHOW                       ;IS INDEX TOO BIG? 
+205a d5			        PUSH DE                         ;WILL IT OVERWRITE 
+205b eb			        EX DE,HL                        ;TEXT? 
+205c cd a1 24		        CALL SIZE                       ;FIND SIZE OF FREE 
+205f cd 31 20		        CALL BRST20                     ;AND CHECK THAT 
+2062 da 4b 25		        JP C,ASORRY                     ;IF SO, SAY "SORRY" 
+2065 21 eb 27		        LD HL,VARBGN                    ;IF NOT GET ADDRESS 
+2068 cd c3 24		        CALL SUBDE                      ;OF @(EXPR) AND PUT IT 
+206b d1			        POP DE                          ;IN HL 
+206c c9			        RET                             ;C FLAG IS CLEARED 
+206d			 
+206d fe 1b		TV1:    CP 1BH                          ;NOT @, IS IT A TO Z? 
+206f 3f			        CCF                             ;IF NOT RETURN C FLAG 
+2070 d8			        RET C 
+2071 13			        INC DE                          ;IF A THROUGH Z 
+2072 21 eb 27		        LD HL,VARBGN                    ;COMPUTE ADDRESS OF 
+2075 07			        RLCA                            ;THAT VARIABLE 
+2076 85			        ADD A,L                         ;AND RETURN IT IN HL 
+2077 6f			        LD L,A                          ;WITH C FLAG CLEARED 
+2078 3e 00		        LD A,00H 
+207a 8c			        ADC A,H 
+207b 67			        LD H,A 
+207c c9			        RET 
+207d			 
+207d 23			TC1:    INC HL                          ;COMPARE THE BYTE THAT 
+207e 28 07		        JR Z,TC2                        ;FOLLOWS THE RST INST. 
+2080 c5			        PUSH BC                         ;WITH THE TEXT (DE->) 
+2081 4e			        LD C,(HL)                       ;IF NOT =, ADD THE 2ND 
+2082 06 00		        LD B,00H                        ;BYTE THAT FOLLOWS THE 
+2084 09			        ADD HL,BC                       ;RST TO THE OLD PC 
+2085 c1			        POP BC                          ;I.E., DO A RELATIVE 
+2086 1b			        DEC DE                          ;JUMP IF NOT = 
+2087			 
+2087 13			TC2:    INC DE                          ;IF =, SKIP THOSE BYTES 
+2088 23			        INC HL                          ;AND CONTINUE 
+2089 e3			        EX (SP),HL 
+208a c9			        RET 
+208b			 
+208b			TSTNUM: 
+208b 21 00 00		        LD HL,0000H                     ;*** TSTNUM *** 
+208e 44			        LD B,H                          ;TEST IF THE TEXT IS 
+208f cd 39 20		        CALL BRST28                     ;A NUMBER 
+2092			 
+2092			TN1: 
+2092 fe 30		        CP 30H                          ;IF NOT, RETURN 0 IN 
+2094 d8			        RET C                           ;B AND HL 
+2095 fe 3a		        CP 3AH                          ;IF NUMBERS, CONVERT 
+2097 d0			        RET NC                          ;TO BINARY IN HL AND 
+2098 3e f0		        LD A,0F0H                       ;SET B TO # OF DIGITS 
+209a a4			        AND H                           ;IF H>255, THERE IS NO 
+209b 20 17		        JR NZ,QHOW                      ;ROOM FOR NEXT DIGIT 
+209d 04			        INC B                           ;B COUNTS # OF DIGITS 
+209e c5			        PUSH BC 
+209f 44			        LD B,H                          ;HL=10*HL+(NEW DIGIT) 
+20a0 4d			        LD C,L 
+20a1 29			        ADD HL,HL                       ;WHERE 10* IS DONE BY 
+20a2 29			        ADD HL,HL                       ;SHIFT AND ADD 
+20a3 09			        ADD HL,BC 
+20a4 29			        ADD HL,HL 
+20a5 1a			        LD A,(DE)                       ;AND (DIGIT) IS FROM 
+20a6 13			        INC DE                          ;STRIPPING THE ASCII 
+20a7 e6 0f		        AND 0FH                         ;CODE 
+20a9 85			        ADD A,L 
+20aa 6f			        LD L,A 
+20ab 3e 00		        LD A,00H 
+20ad 8c			        ADC A,H 
+20ae 67			        LD H,A 
+20af c1			        POP BC 
+20b0 1a			        LD A,(DE)                       ;DO THIS DIGIT AFTER 
+20b1 f2 92 20		        JP P,TN1                        ;DIGIT. S SAYS OVERFLOW 
+20b4			 
+20b4 d5			QHOW:   PUSH DE                         ;*** ERROR "HOW?" *** 
+20b5 11 bb 20		AHOW:   LD DE,HOW 
+20b8 c3 1f 25		        JP ERROR_ROUTINE 
+20bb			 
+20bb .. 0d		HOW:    DEFM 'HOW?',CR 
+20c0 ff			        DEFB -1 
+20c1 .. 0d		OK:     DEFM 'OK',CR 
+20c4 ff			        DEFB -1 ; 0 
+20c5 .. 0d		WHAT:   DEFM 'WHAT?',CR 
+20cb ff			        DEFB -1 
+20cc .. 0d		SORRY:  DEFM 'SORRY',CR 
+20d2 ff			        DEFB -1 
+20d3			 
+20d3			;************************************************************* 
+20d3			; 
+20d3			; *** MAIN *** 
+20d3			; 
+20d3			; THIS IS THE MAIN LOOP THAT COLLECTS THE TINY BASIC PROGRAM 
+20d3			; AND STORES IT IN THE MEMORY. 
+20d3			; 
+20d3			; AT START, IT PRINTS OUT "(CR)OK(CR)", AND INITIALIZES THE 
+20d3			; STACK AND SOME OTHER INTERNAL VARIABLES.  THEN IT PROMPTS 
+20d3			; ">" AND READS A LINE.  IF THE LINE STARTS WITH A NON-ZERO 
+20d3			; NUMBER, THIS NUMBER IS THE LINE NUMBER.  THE LINE NUMBER 
+20d3			; (IN 16 BIT BINARY) AND THE REST OF THE LINE (INCLUDING CR) 
+20d3			; IS STORED IN THE MEMORY.  IF A LINE WITH THE SAME LINE 
+20d3			; NUMBER IS ALREADY THERE, IT IS REPLACED BY THE NEW ONE.  IF 
+20d3			; THE REST OF THE LINE CONSISTS OF A CR ONLY, IT IS NOT STORED 
+20d3			; AND ANY EXISTING LINE WITH THE SAME LINE NUMBER IS DELETED. 
+20d3			; 
+20d3			; AFTER A LINE IS INSERTED, REPLACED, OR DELETED, THE PROGRAM 
+20d3			; LOOPS BACK AND ASKS FOR ANOTHER LINE.  THIS LOOP WILL BE 
+20d3			; TERMINATED WHEN IT READS A LINE WITH ZERO OR NO LINE 
+20d3			; NUMBER; AND CONTROL IS TRANSFERED TO "DIRECT". 
+20d3			; 
+20d3			; TINY BASIC PROGRAM SAVE AREA STARTS AT THE MEMORY LOCATION 
+20d3			; LABELED "TXTBGN" AND ENDS AT "TXTEND".  WE ALWAYS FILL THIS 
+20d3			; AREA STARTING AT "TXTBGN", THE UNFILLED PORTION IS POINTED 
+20d3			; BY THE CONTENT OF A MEMORY LOCATION LABELED "TXTUNF". 
+20d3			; 
+20d3			; THE MEMORY LOCATION "CURRNT" POINTS TO THE LINE NUMBER 
+20d3			; THAT IS CURRENTLY BEING INTERPRETED.  WHILE WE ARE IN 
+20d3			; THIS LOOP OR WHILE WE ARE INTERPRETING A DIRECT COMMAND 
+20d3			; (SEE NEXT SECTION). "CURRNT" SHOULD POINT TO A 0. 
+20d3			;************************************************************* 
+20d3			 
+20d3			RSTART: 
+20d3 31 e8 fd		        LD SP,BSTACK 
+20d6			 
+20d6 3e 0d		ST1:    LD A,CR                         ;OUTPUT CR 
+20d8			        EMT OUTC 
+20d8 f7			        RST 30H 
+20d9 16			        DEFB OUTC 
+20da			        ENDM 
+# End of macro EMT
+20da 11 c1 20		        LD DE,OK                        ;DE->STRING 
+20dd 97			        SUB A                           ;A=0 
+20de cd b3 25		        CALL PRTSTG                     ;PRINT STRING UNTIL CR 
+20e1 21 e8 20		        LD HL,ST2+1                     ;LITERAL 0 
+20e4 22 45 48		        LD (CURRNT),HL                  ;CURRENT->LINE # = 0 
+20e7			 
+20e7 21 00 00		ST2:    LD HL,0000H 
+20ea 22 4d 48		        LD (LOPVAR),HL 
+20ed 22 47 48		        LD (STKGOS),HL 
+20f0			 
+20f0 3e 3e		ST3:    LD A,'>'                        ;PROMPT '>' AND 
+20f2 cd 50 25		        CALL GETLN                      ;READ A LINE 
+20f5 d5			        PUSH DE                         ;DE->END OF LINE 
+20f6 11 22 28		        LD DE,BUFFER                    ;DE->BEGINNING OF LINE 
+20f9 cd 8b 20		        CALL TSTNUM                     ;TEST IF IT IS A NUMBER 
+20fc cd 39 20		        CALL BRST28 
+20ff 7c			        LD A,H                          ;HL=VALUE OF THE # OR 
+2100 b5			        OR L                            ;0 IF NO # WAS FOUND 
+2101 c1			        POP BC                          ;BC->END OF LINE 
+2102 ca 82 27		        JP Z,DIRECT 
+2105 1b			        DEC DE                          ;BACKUP DE AND SAVE 
+2106 7c			        LD A,H                          ;VALUE OF LINE # THERE 
+2107 12			        LD (DE),A 
+2108 1b			        DEC DE 
+2109 7d			        LD A,L 
+210a 12			        LD (DE),A 
+210b c5			        PUSH BC                         ;BC,DE->BEGIN, END 
+210c d5			        PUSH DE 
+210d 79			        LD A,C 
+210e 93			        SUB E 
+210f			 
+210f f5			        PUSH AF                         ;A=# OF BYTES IN LINE 
+2110 cd 8c 25		        CALL FNDLN                      ;FIND THIS LINE IN SAVE 
+2113 d5			        PUSH DE                         ;AREA, DE->SAVE AREA 
+2114 20 10		        JR NZ,ST4                       ;NZ:NOT FOUND, INSERT 
+2116 d5			        PUSH DE                         ;Z:FOUND, DELETE IT 
+2117 cd a9 25		        CALL FNDNXT                     ;FIND NEXT LINE 
+211a			                                        ;DE->NEXT LINE 
+211a c1			        POP BC                          ;BC->LINE TO BE DELETED 
+211b 2a 59 48		        LD HL,(TXTUNF)                  ;HL->UNFILLED SAVE AREA 
+211e cd 43 26		        CALL MVUP                       ;MOVE UP TO DELETE 
+2121 60			        LD H,B                          ;TXTUNF->UNFILLED ARA 
+2122 69			        LD L,C 
+2123 22 59 48		        LD (TXTUNF),HL                  ;UPDATE 
+2126			 
+2126 c1			ST4:    POP BC                          ;GET READY TO INSERT 
+2127 2a 59 48		        LD HL,(TXTUNF)                  ;BUT FIRST CHECK IF 
+212a f1			        POP AF                          ;THE LENGTH OF NEW LINE 
+212b e5			        PUSH HL                         ;IS 3 (LINE # AND CR) 
+212c fe 03		        CP 03H                          ;THEN DO NOT INSERT 
+212e 28 a3		        JR Z,RSTART                     ;MUST CLEAR THE STACK 
+2130 85			        ADD A,L                         ;COMPUTE NEW TXTUNF 
+2131 6f			        LD L,A 
+2132 3e 00		        LD A,00H 
+2134 8c			        ADC A,H 
+2135 67			        LD H,A                          ;HL->NEW UNFILLED AREA 
+2136 11 00 ff		        LD DE,TXTEND                    ;CHECK TO SEE IF THERE 
+2139 cd 31 20		        CALL BRST20                     ;IS ENOUGH SPACE 
+213c d2 4a 25		        JP NC,QSORRY                    ;SORRY, NO ROOM FOR IT 
+213f 22 59 48		        LD (TXTUNF),HL                  ;OK, UPDATE TXTUNF 
+2142 d1			        POP DE                          ;DE->OLD UNFILLED AREA 
+2143 cd 4d 26		        CALL MVDOWN 
+2146 d1			        POP DE                          ;DE->BEGIN, HL->END 
+2147 e1			        POP HL 
+2148 cd 43 26		        CALL MVUP                       ;MOVE NEW LINE TO SAVE 
+214b 18 a3		        JR ST3                          ;AREA 
+214d			 
+214d			;************************************************************* 
+214d			; 
+214d			; WHAT FOLLOWS IS THE CODE TO EXECUTE DIRECT AND STATEMENT 
+214d			; COMMANDS.  CONTROL IS TRANSFERED TO THESE POINTS VIA THE 
+214d			; COMMAND TABLE LOOKUP CODE OF 'DIRECT' AND 'EXEC' IN LAST 
+214d			; SECTION.  AFTER THE COMMAND IS EXECUTED, CONTROL IS 
+214d			; TRANSFERED TO OTHERS SECTIONS AS FOLLOWS: 
+214d			; 
+214d			; FOR 'LIST', 'NEW', AND 'STOP': GO BACK TO 'RSTART' 
+214d			; FOR 'RUN': GO EXECUTE THE FIRST STORED LINE IF ANY, ELSE 
+214d			; GO BACK TO 'RSTART'. 
+214d			; FOR 'GOTO' AND 'GOSUB': GO EXECUTE THE TARGET LINE. 
+214d			; FOR 'RETURN' AND 'NEXT': GO BACK TO SAVED RETURN LINE. 
+214d			; FOR ALL OTHERS: IF 'CURRENT' -> 0, GO TO 'RSTART', ELSE 
+214d			; GO EXECUTE NEXT COMMAND.  (THIS IS DONE IN 'FINISH'.) 
+214d			;************************************************************* 
+214d			; 
+214d			; *** NEW *** STOP *** RUN (& FRIENDS) *** & GOTO *** 
+214d			; 
+214d			; 'NEW(CR)' SETS 'TXTUNF' TO POINT TO 'TXTBGN' 
+214d			; 
+214d			; 'STOP(CR)' GOES BACK TO 'RSTART' 
+214d			; 
+214d			; 'RUN(CR)' FINDS THE FIRST STORED LINE, STORE ITS ADDRESS (IN 
+214d			; 'CURRENT'), AND START EXECUTE IT.  NOTE THAT ONLY THOSE 
+214d			; COMMANDS IN TAB2 ARE LEGAL FOR STORED PROGRAM. 
+214d			; 
+214d			; THERE ARE 3 MORE ENTRIES IN 'RUN': 
+214d			; 'RUNNXL' FINDS NEXT LINE, STORES ITS ADDR. AND EXECUTES IT. 
+214d			; 'RUNTSL' STORES THE ADDRESS OF THIS LINE AND EXECUTES IT. 
+214d			; 'RUNSML' CONTINUES THE EXECUTION ON SAME LINE. 
+214d			; 
+214d			; 'GOTO EXPR(CR)' EVALUATES THE EXPRESSION, FIND THE TARGET 
+214d			; LINE, AND JUMP TO 'RUNTSL' TO DO IT. 
+214d			;************************************************************* 
+214d			 
+214d cd 15 25		NEW:    CALL ENDCHK                     ;*** NEW(CR) *** 
+2150 21 5b 48		        LD HL,TXTBGN 
+2153 22 59 48		        LD (TXTUNF),HL 
+2156			 
+2156 cd 15 25		STOP:   CALL ENDCHK                     ;*** STOP(CR) *** 
+2159 c3 d3 20		        JP RSTART 
+215c			 
+215c cd 15 25		RUN:    CALL ENDCHK                     ;*** RUN(CR) *** 
+215f 11 5b 48		        LD DE,TXTBGN                    ;FIRST SAVED LINE 
+2162			 
+2162 21 00 00		RUNNXL: LD HL,00H                       ;*** RUNNXL *** 
+2165 cd 94 25		        CALL FNDLP                      ;FIND WHATEVER LINE # 
+2168 da d3 20		        JP C,RSTART                     ;C:PASSED TXTUNF, QUIT 
+216b			 
+216b eb			RUNTSL: EX DE,HL                        ;*** RUNTSL *** 
+216c 22 45 48		        LD (CURRNT),HL                  ;SET 'CURRENT'->LINE # 
+216f eb			        EX DE,HL 
+2170 13			        INC DE                          ;BUMP PASS LINE # 
+2171 13			        INC DE 
+2172			 
+2172 cd d5 26		RUNSML: CALL CHKIO                      ;*** RUNSML *** 
+2175 21 07 27		        LD HL,TAB2-1                    ;FIND COMMAND IN TAB2 
+2178 c3 85 27		        JP EXEC                         ;AND EXECUTE IT 
+217b			 
+217b cd 28 20		GOTO:   CALL BRST18                     ;*** GOTO EXPR *** 
+217e d5			        PUSH DE                         ;SAVE FOR ERROR ROUTINE 
+217f cd 15 25		        CALL ENDCHK                     ;MUST FIND A CR 
+2182 cd 8c 25		        CALL FNDLN                      ;FIND THE TARGET LINE 
+2185 c2 b5 20		        JP NZ,AHOW                      ;NO SUCH LINE # 
+2188 f1			        POP AF                          ;CLEAR THE PUSH DE 
+2189 18 e0		        JR RUNTSL                       ;GO DO IT 
+218b			 
+218b			;************************************************************* 
+218b			; 
+218b			; *** LIST *** & PRINT *** 
+218b			; 
+218b			; LIST HAS TWO FORMS: 
+218b			; 'LIST(CR)' LISTS ALL SAVED LINES 
+218b			; 'LIST #(CR)' START LIST AT THIS LINE # 
+218b			; YOU CAN STOP THE LISTING BY CONTROL C KEY 
+218b			; 
+218b			; PRINT COMMAND IS 'PRINT ....;' OR 'PRINT ....(CR)' 
+218b			; WHERE '....' IS A LIST OF EXPRESIONS, FORMATS, BACK- 
+218b			; ARROWS, AND STRINGS.  THESE ITEMS ARE SEPERATED BY COMMAS. 
+218b			; 
+218b			; A FORMAT IS A POUND SIGN FOLLOWED BY A NUMBER.  IT CONTROLS 
+218b			; THE NUMBER OF SPACES THE VALUE OF A EXPRESION IS GOING TO 
+218b			; BE PRINTED.  IT STAYS EFFECTIVE FOR THE REST OF THE PRINT 
+218b			; COMMAND UNLESS CHANGED BY ANOTHER FORMAT.  IF NO FORMAT IS 
+218b			; SPECIFIED, 6 POSITIONS WILL BE USED. 
+218b			; 
+218b			; A STRING IS QUOTED IN A PAIR OF SINGLE QUOTES OR A PAIR OF 
+218b			; DOUBLE QUOTES. 
+218b			; 
+218b			; A BACK-ARROW MEANS GENERATE A (CR) WITHOUT (LF) 
+218b			; 
+218b			; A (CRLF) IS GENERATED AFTER THE ENTIRE LIST HAS BEEN 
+218b			; PRINTED OR IF THE LIST IS A NULL LIST.  HOWEVER IF THE LIST 
+218b			; ENDED WITH A COMMA, NO (CRLF) IS GENERATED. 
+218b			;************************************************************* 
+218b			 
+218b cd 8b 20		LIST:   CALL TSTNUM                     ;TEST IF THERE IS A # 
+218e cd 15 25		        CALL ENDCHK                     ;IF NO # WE GET A 0 
+2191 cd 8c 25		        CALL FNDLN                      ;FIND THIS OR NEXT LINE 
+2194			 
+2194 da d3 20		LS1:    JP C,RSTART                     ;C:PASSED TXTUNF 
+2197 cd 2e 26		        CALL PRTLN                      ;PRINT THE LINE 
+219a cd d5 26		        CALL CHKIO                      ;STOP IF HIT CONTROL-C 
+219d cd 94 25		        CALL FNDLP                      ;FIND NEXT LINE 
+21a0 18 f2		        JR LS1                          ;AND LOOP BACK 
+21a2			 
+21a2 0e 06		PRINT:  LD C,06H                        ;C = # OF SPACES 
+21a4 cd 16 20		        CALL BRST08                     ;F NULL LIST & ";" 
+21a7 3b			        DB 3BH 
+21a8 06			        DB PRI2-$-1 
+21a9 3e 0d		        LD A,CR                         ;GIVE CR-LF AND ;CALL CROUT 
+21ab			        EMT OUTC 
+21ab f7			        RST 30H 
+21ac 16			        DEFB OUTC 
+21ad			        ENDM 
+# End of macro EMT
+21ad 18 c3		        JR RUNSML                       ;CONTINUE SAME LINE 
+21af			 
+21af cd 16 20		PRI2:   CALL BRST08                     ;IF NULL LIST (CR) 
+21b2 0d			        DB CR 
+21b3 06			        DB PRI0-$-1 
+21b4 3e 0d		        LD A,CR                         ;GIVE CR-LF AND ;CALL CROUT 
+21b6			        EMT OUTC 
+21b6 f7			        RST 30H 
+21b7 16			        DEFB OUTC 
+21b8			        ENDM 
+# End of macro EMT
+21b8			 
+21b8 18 a8		        JR RUNNXL                       ;GO TO NEXT LINE 
+21ba			 
+21ba cd 16 20		PRI0:   CALL BRST08                     ;ELSE IS IT FORMAT? 
+21bd ..			        DM '#' 
+21be 06			        DB PRI1-$-1 
+21bf cd 28 20		        CALL BRST18                     ;YES, EVALUATE EXPR. 
+21c2 4d			        LD C,L                          ;AND SAVE IT IN C 
+21c3 18 05		        JR PRI3                          ;LOOK FOR MORE TO PRINT 
+21c5			 
+21c5 cd c0 25		PRI1:   CALL QTSTG                      ;OR IS IT A STRING? 
+21c8 18 11		        JR PRI8                          ;IF NOT, MUST BE EXPR. 
+21ca			 
+21ca cd 16 20		PRI3:   CALL BRST08                     ;IF ",", GO FIND NEXT 
+21cd ..			        DM ',' 
+21ce 05			        DB PRI6-$-1 
+21cf cd 02 25		        CALL FIN                        ;IN THE LIST. 
+21d2 18 e6		        JR PRI0                          ;LIST CONTINUES 
+21d4			 
+21d4 3e 0d		PRI6:   LD A,CR                         ;GIVE CR-LF AND ;CALL CROUT 
+21d6			        EMT OUTC                        ; LIST ENDS 
+21d6 f7			        RST 30H 
+21d7 16			        DEFB OUTC 
+21d8			        ENDM 
+# End of macro EMT
+21d8 cd 42 20		        CALL BRST30 
+21db			 
+21db cd 28 20		PRI8:   CALL BRST18                     ;EVALUATE THE EXPR 
+21de c5			        PUSH BC 
+21df cd ee 25		        CALL PRTNUM                     ;PRINT THE VALUE 
+21e2 c1			        POP BC 
+21e3 18 e5		        JR PRI3                          ;MORE TO PRINT? 
+21e5			 
+21e5			;************************************************************* 
+21e5			; 
+21e5			; *** GOSUB *** & RETURN *** 
+21e5			; 
+21e5			; 'GOSUB EXPR;' OR 'GOSUB EXPR (CR)' IS LIKE THE 'GOTO' 
+21e5			; COMMAND, EXCEPT THAT THE CURRENT TEXT POINTER, STACK POINTER 
+21e5			; ETC. ARE SAVE SO THAT EXECUTION CAN BE CONTINUED AFTER THE 
+21e5			; SUBROUTINE 'RETURN'.  IN ORDER THAT 'GOSUB' CAN BE NESTED 
+21e5			; (AND EVEN RECURSIVE), THE SAVE AREA MUST BE STACKED. 
+21e5			; THE STACK POINTER IS SAVED IN 'STKGOS', THE OLD 'STKGOS' IS 
+21e5			; SAVED IN THE STACK.  IF WE ARE IN THE MAIN ROUTINE, 'STKGOS' 
+21e5			; IS ZERO (THIS WAS DONE BY THE "MAIN" SECTION OF THE CODE), 
+21e5			; BUT WE STILL SAVE IT AS A FLAG FOR NO FURTHER 'RETURN'S. 
+21e5			; 
+21e5			; 'RETURN(CR)' UNDOS EVERYTHING THAT 'GOSUB' DID, AND THUS 
+21e5			; RETURN THE EXECUTION TO THE COMMAND AFTER THE MOST RECENT 
+21e5			; 'GOSUB'.  IF 'STKGOS' IS ZERO, IT INDICATES THAT WE 
+21e5			; NEVER HAD A 'GOSUB' AND IS THUS AN ERROR. 
+21e5			;************************************************************* 
+21e5			 
+21e5 cd 76 26		GOSUB:  CALL PUSHA                      ;SAVE THE CURRENT "FOR" 
+21e8 cd 28 20		        CALL BRST18                     ;PARAMETERS 
+21eb d5			        PUSH DE                         ;AND TEXT POINTER 
+21ec cd 8c 25		        CALL FNDLN                      ;FIND THE TARGET LINE 
+21ef c2 b5 20		        JP NZ,AHOW                      ;NOT THERE. SAY "HOW?" 
+21f2 2a 45 48		        LD HL,(CURRNT)                  ;FOUND IT, SAVE OLD. 
+21f5 e5			        PUSH HL                         ;'CURRNT' OLD 'STKGOS' 
+21f6 2a 47 48		        LD HL,(STKGOS) 
+21f9 e5			        PUSH HL 
+21fa 21 00 00		        LD HL,0000H                     ;AND LOAD NEW ONES 
+21fd 22 4d 48		        LD (LOPVAR),HL 
+2200 39			        ADD HL,SP 
+2201 22 47 48		        LD (STKGOS),HL 
+2204 c3 6b 21		        JP RUNTSL                       ;THEN RUN THAT LINE 
+2207			 
+2207 cd 15 25		RETURN: CALL ENDCHK                     ;THERE MUST BE A CR 
+220a 2a 47 48		        LD HL,(STKGOS)                  ;OLD STACK POINTER 
+220d 7c			        LD A,H                          ;0 MEANS NOT EXIST 
+220e b5			        OR L 
+220f ca 1b 25		        JP Z,QWHAT                      ;SO, WE SAY: "WHAT?" 
+2212 f9			        LD SP,HL                        ;ELSE, RESTORE IT 
+2213 e1			        POP HL 
+2214 22 47 48		        LD (STKGOS),HL                  ;AND THE OLD "STKGOS" 
+2217 e1			        POP HL 
+2218 22 45 48		        LD (CURRNT),HL                  ;AND THE OLD 'CURRNT' 
+221b d1			        POP DE                          ;OLD TEXT POINTER 
+221c cd 5b 26		        CALL POPA                       ;OLD "FOR" PARAMETERS 
+221f cd 42 20		        CALL BRST30                     ;AND WE ARE BACK HOME 
+2222			 
+2222			;************************************************************* 
+2222			; 
+2222			; *** FOR *** & NEXT *** 
+2222			; 
+2222			; 'FOR' HAS TWO FORMS: 
+2222			; 'FOR VAR=EXP1 TO EXP2 STEP EXP3' AND 'FOR VAR=EXP1 TO EXP2' 
+2222			; THE SECOND FORM MEANS THE SAME THING AS THE FIRST FORM WITH 
+2222			; EXP3=1.  (I.E., WITH A STEP OF +1.) 
+2222			; TBI WILL FIND THE VARIABLE VAR, AND SET ITS VALUE TO THE 
+2222			; CURRENT VALUE OF EXP1.  IT ALSO EVALUATES EXP2 AND EXP3 
+2222			; AND SAVE ALL THESE TOGETHER WITH THE TEXT POINTER ETC. IN 
+2222			; THE 'FOR' SAVE AREA, WHICH CONSISTS OF 'LOPVAR', 'LOPINC', 
+2222			; 'LOPLMT', 'LOPLN', AND 'LOPPT'.  IF THERE IS ALREADY SOME- 
+2222			; THING IN THE SAVE AREA (THIS IS INDICATED BY A NON-ZERO 
+2222			; 'LOPVAR'), THEN THE OLD SAVE AREA IS SAVED IN THE STACK 
+2222			; BEFORE THE NEW ONE OVERWRITES IT. 
+2222			; TBI WILL THEN DIG IN THE STACK AND FIND OUT IF THIS SAME 
+2222			; VARIABLE WAS USED IN ANOTHER CURRENTLY ACTIVE 'FOR' LOOP. 
+2222			; IF THAT IS THE CASE, THEN THE OLD 'FOR' LOOP IS DEACTIVATED. 
+2222			; (PURGED FROM THE STACK..) 
+2222			; 
+2222			; 'NEXT VAR' SERVES AS THE LOGICAL (NOT NECESSARILLY PHYSICAL) 
+2222			; END OF THE 'FOR' LOOP.  THE CONTROL VARIABLE VAR. IS CHECKED 
+2222			; WITH THE 'LOPVAR'.  IF THEY ARE NOT THE SAME, TBI DIGS IN 
+2222			; THE STACK TO FIND THE RIGHT ONE AND PURGES ALL THOSE THAT 
+2222			; DID NOT MATCH.  EITHER WAY, TBI THEN ADDS THE 'STEP' TO 
+2222			; THAT VARIABLE AND CHECK THE RESULT WITH THE LIMIT.  IF IT 
+2222			; IS WITHIN THE LIMIT, CONTROL LOOPS BACK TO THE COMMAND 
+2222			; FOLLOWING THE 'FOR'.  IF OUTSIDE THE LIMIT, THE SAVE AREA 
+2222			; IS PURGED AND EXECUTION CONTINUES. 
+2222			;************************************************************* 
+2222			 
+2222 cd 76 26		FOR:    CALL PUSHA                      ;SAVE THE OLD SAVE AREA 
+2225 cd e9 24		        CALL SETVAL                     ;SET THE CONTROL VAR. 
+2228 2b			        DEC HL                          ;HL IS ITS ADDRESS 
+2229 22 4d 48		        LD (LOPVAR),HL                  ;SAVE THAT 
+222c 21 5d 27		        LD HL,TAB5-1                    ;USE 'EXEC' TO LOOK 
+222f c3 85 27		        JP EXEC                         ;FOR THE WORK 'TO' 
+2232			 
+2232 cd 28 20		FR1:    CALL BRST18                     ;EVALUATE THE LIMITE 
+2235 22 51 48		        LD (LOPLMT),HL                  ;SAVE THAT 
+2238 21 63 27		        LD HL,TAB6-1                    ;USE 'EXEC' TO LOOK 
+223b c3 85 27		        JP EXEC                         ;FOR THE WORD 'STEP' 
+223e			 
+223e cd 28 20		FR2:    CALL BRST18                     ;FOUND IT, GET STEP 
+2241 18 03		        JR FR4 
+2243			 
+2243 21 01 00		FR3:    LD HL,0001H                     ;NOT FOUND, SET TO 1 
+2246			 
+2246 22 4f 48		FR4:    LD (LOPINC),HL                  ;SAVE THAT TOO 
+2249			 
+2249 2a 45 48		FR5:    LD HL,(CURRNT)                  ;SAVE CURRENT LINE # 
+224c 22 53 48		        LD (LOPLN),HL 
+224f eb			        EX DE,HL                        ;AND TEXT POINTER 
+2250 22 55 48		        LD (LOPPT),HL 
+2253 01 0a 00		        LD BC,0AH                       ;DIG INTO STACK TO 
+2256 2a 4d 48		        LD HL,(LOPVAR)                  ;FIND 'LOPVAR' 
+2259 eb			        EX DE,HL 
+225a 60			        LD H,B 
+225b 68			        LD L,B                          ;HL=0 NOW 
+225c 39			        ADD HL,SP                       ;HERE IS THE STACK 
+225d 3e			        DB 3EH                          ;DISASSEMBLY SAID "ld a,09h" 
+225e			 
+225e 09			FR7:    ADD HL,BC                       ;EACH LEVEL IS 10 DEEP - DIS = 09 
+225f 7e			        LD A,(HL)                       ;GET THAT OLD 'LOPVAR' 
+2260 23			        INC HL 
+2261 b6			        OR (HL) 
+2262 28 18		        JR Z,FR8                        ;0 SAYS NO MORE IN IT 
+2264 7e			        LD A,(HL) 
+2265 2b			        DEC HL 
+2266 ba			        CP D                            ;SAME AS THIS ONE? 
+2267 20 f5		        JR NZ,FR7 
+2269 7e			        LD A,(HL)                       ;THE OTHER HALF? 
+226a bb			        CP E 
+226b 20 f1		        JR NZ,FR7 
+226d eb			        EX DE,HL                        ;YES, FOUND ONE 
+226e 21 00 00		        LD HL,0000H 
+2271 39			        ADD HL,SP                       ;TRY TO MOVE SP 
+2272 44			        LD B,H 
+2273 4d			        LD C,L 
+2274 21 0a 00		        LD HL,000AH 
+2277 19			        ADD HL,DE 
+2278 cd 4d 26		        CALL MVDOWN                     ;AND PURGE 10 WORDS 
+227b f9			        LD SP,HL                        ;IN THE STACK 
+227c			 
+227c 2a 55 48		FR8:    LD HL,(LOPPT)                   ;JOB DONE, RESTORE DE 
+227f eb			        EX DE,HL 
+2280 cd 42 20		        CALL BRST30                     ;AND CONTINUE 
+2283			 
+2283 cd 4b 20		NEXT:   CALL BRST38                     ;GET ADDRESS OF VAR. 
+2286 da 1b 25		        JP C,QWHAT                      ;NO VARIABLE, "WHAT?" 
+2289 22 49 48		        LD (VARNXT),HL                  ;YES, SAVE IT 
+228c			 
+228c d5			NX0:    PUSH DE                         ;SAVE TEXT POINTER 
+228d eb			        EX DE,HL 
+228e 2a 4d 48		        LD HL,(LOPVAR)                  ;GET VAR. IN 'FOR' 
+2291 7c			        LD A,H 
+2292 b5			        OR L                            ;0 SAYS NEVER HAD ONE 
+2293 ca 1c 25		        JP Z,AWHAT                      ;SO WE ASK: "WHAT?" 
+2296 cd 31 20		        CALL BRST20                     ;ELSE WE CHECK THEM 
+2299 28 09		        JR Z,NX3                        ;OK, THEY AGREE 
+229b d1			        POP DE                          ;NO, LET'S SEE 
+229c cd 5b 26		        CALL POPA                       ;PURGE CURRENT LOOP 
+229f 2a 49 48		        LD HL,(VARNXT)                  ;AND POP ONE LEVEL 
+22a2 18 e8		        JR NX0                          ;GO CHECK AGAIN 
+22a4			 
+22a4 5e			NX3:    LD E,(HL)                       ;COME HERE WHEN AGREED 
+22a5 23			        INC HL 
+22a6 56			        LD D,(HL)                       ;DE=VALUE OF VAR. 
+22a7 2a 4f 48		        LD HL,(LOPINC) 
+22aa e5			        PUSH HL 
+22ab 7c			        LD A,H 
+22ac aa			        XOR D 
+22ad 7a			        LD A,D 
+22ae 19			        ADD HL,DE                       ;ADD ONE STEP 
+22af fa b6 22		        JP M,NX4 
+22b2 ac			        XOR H 
+22b3 fa d9 22		        JP M,NX5 
+22b6			 
+22b6 eb			NX4:    EX DE,HL 
+22b7 2a 4d 48		        LD HL,(LOPVAR)                  ;PUT IT BACK 
+22ba 73			        LD (HL),E 
+22bb 23			        INC HL 
+22bc 72			        LD (HL),D 
+22bd 2a 51 48		        LD HL,(LOPLMT)                  ;HL->LIMIT 
+22c0 f1			        POP AF                          ;OLD HL 
+22c1 b7			        OR A 
+22c2 f2 c6 22		        JP P,NX1                        ;STEP > 0 
+22c5 eb			        EX DE,HL                        ;STEP < 0 
+22c6			 
+22c6 cd df 24		NX1:    CALL CKHLDE                     ;COMPARE WITH LIMIT 
+22c9 d1			        POP DE                          ;RESTORE TEXT POINTER 
+22ca 38 0f		        JR C,NX2                        ;OUTSIDE LIMIT 
+22cc 2a 53 48		        LD HL,(LOPLN)                   ;WITHIN LIMIT, GO 
+22cf 22 45 48		        LD (CURRNT),HL                  ;BACK TO THE SAVED 
+22d2 2a 55 48		        LD HL,(LOPPT)                   ;'CURRNT' AND TEXT 
+22d5 eb			        EX DE,HL                        ;POINTER 
+22d6 cd 42 20		        CALL BRST30 
+22d9			 
+22d9 e1			NX5:    POP HL 
+22da d1			        POP DE 
+22db			 
+22db cd 5b 26		NX2:    CALL POPA                       ;PURGE THIS LOOP 
+22de cd 42 20		        CALL BRST30 
+22e1			 
+22e1			;************************************************************* 
+22e1			; 
+22e1			; *** REM *** IF *** INPUT *** & LET (& DEFLT) *** 
+22e1			; 
+22e1			; 'REM' CAN BE FOLLOWED BY ANYTHING AND IS IGNORED BY TBI. 
+22e1			; TBI TREATS IT LIKE AN 'IF' WITH A FALSE CONDITION. 
+22e1			; 
+22e1			; 'IF' IS FOLLOWED BY AN EXPR. AS A CONDITION AND ONE OR MORE 
+22e1			; COMMANDS (INCLUDING OTHER 'IF'S) SEPERATED BY SEMI-COLONS. 
+22e1			; NOTE THAT THE WORD 'THEN' IS NOT USED.  TBI EVALUATES THE 
+22e1			; EXPR. IF IT IS NON-ZERO, EXECUTION CONTINUES.  IF THE 
+22e1			; EXPR. IS ZERO, THE COMMANDS THAT FOLLOWS ARE IGNORED AND 
+22e1			; EXECUTION CONTINUES AT THE NEXT LINE. 
+22e1			; 
+22e1			; 'INPUT' COMMAND IS LIKE THE 'PRINT' COMMAND, AND IS FOLLOWED 
+22e1			; BY A LIST OF ITEMS.  IF THE ITEM IS A STRING IN SINGLE OR 
+22e1			; DOUBLE QUOTES, OR IS A BACK-ARROW, IT HAS THE SAME EFFECT AS 
+22e1			; IN 'PRINT'.  IF AN ITEM IS A VARIABLE, THIS VARIABLE NAME IS 
+22e1			; PRINTED OUT FOLLOWED BY A COLON.  THEN TBI WAITS FOR AN 
+22e1			; EXPR. TO BE TYPED IN.  THE VARIABLE IS THEN SET TO THE 
+22e1			; VALUE OF THIS EXPR.  IF THE VARIABLE IS PROCEDED BY A STRING 
+22e1			; (AGAIN IN SINGLE OR DOUBLE QUOTES), THE STRING WILL BE 
+22e1			; PRINTED FOLLOWED BY A COLON.  TBI THEN WAITS FOR INPUT EXPR. 
+22e1			; AND SET THE VARIABLE TO THE VALUE OF THE EXPR. 
+22e1			; 
+22e1			; IF THE INPUT EXPR. IS INVALID, TBI WILL PRINT "WHAT?", 
+22e1			; "HOW?" OR "SORRY" AND REPRINT THE PROMPT AND REDO THE INPUT. 
+22e1			; THE EXECUTION WILL NOT TERMINATE UNLESS YOU TYPE CONTROL-C. 
+22e1			; THIS IS HANDLED IN 'INPERR'. 
+22e1			; 
+22e1			; 'LET' IS FOLLOWED BY A LIST OF ITEMS SEPERATED BY COMMAS. 
+22e1			; EACH ITEM CONSISTS OF A VARIABLE, AN EQUAL SIGN, AND AN EXPR. 
+22e1			; TBI EVALUATES THE EXPR. AND SET THE VARIABLE TO THAT VALUE. 
+22e1			; TBI WILL ALSO HANDLE 'LET' COMMAND WITHOUT THE WORD 'LET'. 
+22e1			; THIS IS DONE BY 'DEFLT'. 
+22e1			;************************************************************* 
+22e1			 
+22e1 21 00 00		REM:    LD HL,0000H                     ;*** REM *** 
+22e4 3e			        DB 3EH                          ;THIS IS LIKE 'IF 0' 
+22e5			 
+22e5 cd 28 20		IFF:    CALL BRST18                     ;*** IF *** 
+22e8 7c			        LD A,H                          ;IS THE EXPR.=0? 
+22e9 b5			        OR L 
+22ea c2 72 21		        JP NZ,RUNSML                    ;NO, CONTINUE 
+22ed cd ab 25		        CALL FNDSKP                     ;YES, SKIP REST OF LINE 
+22f0 d2 6b 21		        JP NC,RUNTSL                    ;AND RUN THE NEXT LINE 
+22f3 c3 d3 20		        JP RSTART                       ;IF NO NEXT, RE-START 
+22f6			 
+22f6 2a 4b 48		INPERR: LD HL,(STKINP)                  ;*** INPERR *** 
+22f9 f9			        LD SP,HL                        ;RESTORE OLD SP 
+22fa e1			        POP HL                          ;AND OLD 'CURRNT' 
+22fb 22 45 48		        LD (CURRNT),HL 
+22fe d1			        POP DE                          ;AND OLD TEXT POINTER 
+22ff d1			        POP DE                          ;REDO INPUT 
+2300			 
+2300			INPUT:                                  ;*** INPUT *** 
+2300 d5			IP1:    PUSH DE                         ;SAVE IN CASE OF ERROR 
+2301 cd c0 25		        CALL QTSTG                      ;IS NEXT ITEM A STRING? 
+2304 18 07		        JR IP2                          ;NO 
+2306 cd 4b 20		        CALL BRST38                     ;YES, BUT FOLLOWED BY A 
+2309 38 40		        JR C,IP4                        ;VARIABLE? NO. 
+230b 18 12		        JR IP3                          ;YES. INPUT VARIABLE 
+230d			 
+230d d5			IP2:    PUSH DE                         ;SAVE FOR 'PRTSTG' 
+230e cd 4b 20		        CALL BRST38                     ;MUST BE VARIABLE NOW 
+2311 da 1b 25		        JP C,QWHAT                      ;"WHAT?" IT IS NOT? 
+2314 1a			        LD A,(DE)                       ;GET READY FOR 'PRTSTR' 
+2315 4f			        LD C,A 
+2316 97			        SUB A 
+2317 12			        LD (DE),A 
+2318 d1			        POP DE 
+2319 cd b3 25		        CALL PRTSTG                     ;PRINT STRING AS PROMPT 
+231c 79			        LD A,C                          ;RESTORE TEXT 
+231d 1b			        DEC DE 
+231e 12			        LD (DE),A 
+231f			 
+231f d5			IP3:    PUSH DE                         ;SAVE TEXT POINTER 
+2320 eb			        EX DE,HL 
+2321 2a 45 48		        LD HL,(CURRNT)                  ;ALSO SAVE 'CURRNT' 
+2324 e5			        PUSH HL 
+2325 21 00 23		        LD HL,IP1                       ;A NEGATIVE NUMBER 
+2328 22 45 48		        LD (CURRNT),HL                  ;AS A FLAG 
+232b 21 00 00		        LD HL,0000H                     ;SAVE SP TOO 
+232e 39			        ADD HL,SP 
+232f 22 4b 48		        LD (STKINP),HL 
+2332 d5			        PUSH DE                         ;OLD HL 
+2333 3e 3a		        LD A,3AH                        ;PRINT THIS TOO 
+2335 cd 50 25		        CALL GETLN                      ;AND GET A LINE 
+2338 11 22 28		        LD DE,BUFFER                    ;POINTS TO BUFFER 
+233b cd 28 20		        CALL BRST18                     ;EVALUATE INPUT 
+233e 00			        NOP                             ;CAN BE 'CALL ENDCHK' 
+233f 00			        NOP 
+2340 00			        NOP 
+2341 d1			        POP DE                          ;OK,GET OLD HL 
+2342 eb			        EX DE,HL 
+2343 73			        LD (HL),E                       ;SAVE VALUE IN VAR. 
+2344 23			        INC HL 
+2345 72			        LD (HL),D 
+2346 e1			        POP HL                          ;GET OLD 'CURRNT' 
+2347 22 45 48		        LD (CURRNT),HL 
+234a d1			        POP DE                          ;AND OLD TEXT POINTER 
+234b			 
+234b f1			IP4:    POP AF                          ;PURGE JUNK IN STACK 
+234c cd 16 20		        CALL BRST08                     ;IS NEXT CH. ','? 
+234f ..			        DM ',' 
+2350 02			        DB IP5-$-1 
+2351 18 ad		        JR IP1                          ;YES, MORE ITEMS. 
+2353			 
+2353 cd 42 20		IP5:    CALL BRST30 
+2356			 
+2356 1a			DEFLT:  LD A,(DE)                       ;***  DEFLT *** 
+2357 fe 0d		        CP CR                           ;EMPTY LINE IS OK 
+2359 28 0a		        JR Z,LT1                        ;ELSE IT IS 'LET' 
+235b			 
+235b cd e9 24		LET:    CALL SETVAL                     ;*** LET *** 
+235e cd 16 20		        CALL BRST08                     ;SET VALUE TO VAR 
+2361 ..			        DM ','                          ;---DISASSEMBLE = INC L 
+2362 02			        DB LT1-$-1                      ;---DISASSEMBLE = INC BC 
+2363 18 f6		        JR LET                          ;ITEM BY ITEM 
+2365			 
+2365 cd 42 20		LT1:    CALL BRST30                     ;UNTIL FINISH 
+2368			 
+2368			;************************************************************* 
+2368			; 
+2368			; *** EXPR *** 
+2368			; 
+2368			; 'EXPR' EVALUATES ARITHMETICAL OR LOGICAL EXPRESSIONS. 
+2368			; <EXPR>::<EXPR2> 
+2368			;         <EXPR2><REL.OP.><EXPR2> 
+2368			; WHERE <REL.OP.> IS ONE OF THE OPERATORS IN TAB8 AND THE 
+2368			; RESULT OF THESE OPERATIONS IS 1 IF TRUE AND 0 IF FALSE. 
+2368			; <EXPR2>::=(+ OR -)<EXPR3>(+ OR -<EXPR3>)(....) 
+2368			; WHERE () ARE OPTIONAL AND (....) ARE OPTIONAL REPEATS. 
+2368			; <EXPR3>::=<EXPR4>(* OR /><EXPR4>)(....) 
+2368			; <EXPR4>::=<VARIABLE> 
+2368			;           <FUNCTION> 
+2368			;           (<EXPR>) 
+2368			; <EXPR> IS RECURSIVE SO THAT VARIABLE '@' CAN HAVE AN <EXPR> 
+2368			; AS INDEX, FUNCTIONS CAN HAVE AN <EXPR> AS ARGUMENTS, AND 
+2368			; <EXPR4> CAN BE AN <EXPR> IN PARANTHESE. 
+2368			;************************************************************* 
+2368			 
+2368 21 6b 27		EXPR1:  LD HL,TAB8-1                    ;LOOKUP REL.OP. 
+236b c3 85 27		        JP EXEC                         ;GO DO IT 
+236e			 
+236e cd 97 23		XP11:   CALL XP18                       ;REL.OP.">=" 
+2371 d8			        RET C                           ;NO, RETURN HL=0 
+2372 6f			        LD L,A                          ;YES, RETURN HL=1 
+2373 c9			        RET 
+2374			 
+2374 cd 97 23		XP12:   CALL XP18                       ;REL.OP."#" 
+2377 c8			        RET Z                           ;FALSE, RETURN HL=0 
+2378 6f			        LD L,A                          ;TRUE, RETURN HL=1 
+2379 c9			        RET 
+237a			 
+237a cd 97 23		XP13:   CALL XP18                       ;REL.OP.">" 
+237d c8			        RET Z                           ;FALSE 
+237e d8			        RET C                           ;ALSO FALSE, HL=0 
+237f 6f			        LD L,A                          ;TRUE, HL=1 
+2380 c9			        RET 
+2381			 
+2381 cd 97 23		XP14:   CALL XP18                       ;REL.OP."<=" 
+2384 6f			        LD L,A                          ;SET HL=1 
+2385 c8			        RET Z                           ;REL. TRUE, RETURN 
+2386 d8			        RET C 
+2387 6c			        LD L,H                          ;ELSE SET HL=0 
+2388 c9			        RET 
+2389			 
+2389 cd 97 23		XP15:   CALL XP18                       ;REL.OP."=" 
+238c c0			        RET NZ                          ;FALSE, RETURN HL=0 
+238d 6f			        LD L,A                          ;ELSE SET HL=1 
+238e c9			        RET 
+238f			 
+238f cd 97 23		XP16:   CALL XP18                       ;REL.OP."<" 
+2392 d0			        RET NC                          ;FALSE, RETURN HL=0 
+2393 6f			        LD L,A                          ;ELSE SET HL=1 
+2394 c9			        RET 
+2395			 
+2395 e1			XP17:   POP HL                          ;NOT .REL.OP 
+2396 c9			        RET                             ;RETURN HL=<EXPR2> 
+2397			 
+2397 79			XP18:   LD A,C                          ;SUBROUTINE FOR ALL 
+2398 e1			        POP HL                          ;REL.OP.'S 
+2399 c1			        POP BC 
+239a e5			        PUSH HL                         ;REVERSE TOP OF STACK 
+239b c5			        PUSH BC 
+239c 4f			        LD C,A 
+239d cd ac 23		        CALL EXPR2                      ;GET 2ND <EXPR2> 
+23a0 eb			        EX DE,HL                        ;VALUE IN DE NOW 
+23a1 e3			        EX (SP),HL                      ;1ST <EXPR2> IN HL 
+23a2 cd df 24		        CALL CKHLDE                     ;COMPARE 1ST WITH 2ND 
+23a5 d1			        POP DE                          ;RESTORE TEXT POINTER 
+23a6 21 00 00		        LD HL,0000H                     ;SET HL=0, A=1 
+23a9 3e 01		        LD A,01H 
+23ab c9			        RET 
+23ac			 
+23ac cd 16 20		EXPR2:  CALL BRST08                     ;NEGATIVE SIGN? 
+23af ..			        DM '-' 
+23b0 05			        DB XP21-$-1 
+23b1 21 00 00		        LD HL,0000H                     ;YES, FAKE '0-' 
+23b4 18 27		        JR XP26                         ;TREAT LIKE SUBTRACT 
+23b6			 
+23b6 cd 16 20		XP21:   CALL BRST08                     ;POSITIVE SIGN? IGNORE 
+23b9 ..			        DM '+' 
+23ba 00			        DB XP22-$-1 
+23bb			 
+23bb cd e6 23		XP22:   CALL EXPR3                      ;1ST <EXPR3> 
+23be			 
+23be cd 16 20		XP23:   CALL BRST08                     ;ADD? 
+23c1 ..			        DM '+' 
+23c2 15			        DB XP25-$-1 
+23c3 e5			        PUSH HL                         ;YES, SAVE VALUE 
+23c4 cd e6 23		        CALL EXPR3                      ;GET 2ND <EXPR3> 
+23c7			 
+23c7 eb			XP24:   EX DE,HL                        ;2ND IN DE 
+23c8 e3			        EX (SP),HL                      ;1ST IN HL 
+23c9 7c			        LD A,H                          ;COMPARE SIGN 
+23ca aa			        XOR D 
+23cb 7a			        LD A,D 
+23cc 19			        ADD HL,DE 
+23cd d1			        POP DE                          ;RESTORE TEXT POINTER 
+23ce fa be 23		        JP M,XP23                       ;1ST AND 2ND SIGN DIFFER 
+23d1 ac			        XOR H                           ;1ST AND 2ND SIGN EQUAL 
+23d2 f2 be 23		        JP P,XP23                       ;SO IS RESULT 
+23d5 c3 b4 20		        JP QHOW                         ;ELSE WE HAVE OVERFLOW 
+23d8			 
+23d8 cd 16 20		XP25:   CALL BRST08                     ;SUBTRACT? 
+23db ..			        DM '-' 
+23dc 8b			        DB XP42-$-1 
+23dd			 
+23dd e5			XP26:   PUSH HL                         ;YES, SAVE 1ST <EXPR3> 
+23de cd e6 23		        CALL EXPR3                      ;GET 2ND <EXPR3> 
+23e1 cd cd 24		        CALL CHGSGN                     ;NEGATE 
+23e4 18 e1		        JR XP24                         ;AND ADD THEM 
+23e6			 
+23e6 cd 45 24		EXPR3:  CALL EXPR4                      ;GET 1ST <EXPR4> 
+23e9			 
+23e9 cd 16 20		XP31:   CALL BRST08                         ;MULTIPLY? 
+23ec ..			        DM '*' 
+23ed 29			        DB XP34-$-1 
+23ee e5			        PUSH HL                         ;YES, SAVE 1ST 
+23ef cd 45 24		        CALL EXPR4                      ;AND GET 2ND <EXPR4> 
+23f2 06 00		        LD B,00H                        ;CLEAR B FOR SIGN 
+23f4 cd ca 24		        CALL CHKSGN                     ;CHECK SIGN 
+23f7 e3			        EX (SP),HL                      ;1ST IN HL 
+23f8 cd ca 24		        CALL CHKSGN                     ;CHECK SIGN OF 1ST 
+23fb eb			        EX DE,HL 
+23fc e3			        EX (SP),HL 
+23fd 7c			        LD A,H                          ;IS HL > 255 ? 
+23fe b7			        OR A 
+23ff 28 06		        JR Z,XP32                       ;NO 
+2401 7a			        LD A,D                          ;YES, HOW ABOUT DE 
+2402 b2			        OR D 
+2403 eb			        EX DE,HL                        ;PUT SMALLER IN HL 
+2404 c2 b5 20		        JP NZ,AHOW                      ;ALSO >, WILL OVERFLOW 
+2407			 
+2407 7d			XP32:   LD A,L                          ;THIS IS DUMB 
+2408 21 00 00		        LD HL,0000H                     ;CLEAR RESULT 
+240b b7			        OR A                            ;ADD AND COUNT 
+240c 28 2a		        JR Z,XP35 
+240e			 
+240e 19			XP33:   ADD HL,DE 
+240f da b5 20		        JP C,AHOW                       ;OVERFLOW 
+2412 3d			        DEC A 
+2413 20 f9		        JR NZ,XP33 
+2415 18 21		        JR XP35                         ;FINISHED 
+2417			 
+2417 cd 16 20		XP34:   CALL BRST08                     ;DIVIDE? 
+241a ..			        DM '/' 
+241b 4c			        DB XP42-$-1 
+241c e5			        PUSH HL                         ;YES, SAVE 1ST <EXPR4> 
+241d cd 45 24		        CALL EXPR4                      ;AND GET THE SECOND ONE 
+2420 06 00		        LD B,00H                        ;CLEAR B FOR SIGN 
+2422 cd ca 24		        CALL CHKSGN                     ;CHECK SIGN OF 2ND 
+2425 e3			        EX (SP),HL                      ;GET 1ST IN HL 
+2426 cd ca 24		        CALL CHKSGN                     ;CHECK SIGN OF 1ST 
+2429 eb			        EX DE,HL 
+242a e3			        EX (SP),HL 
+242b eb			        EX DE,HL 
+242c 7a			        LD A,D                          ;DIVIDE BY 0? 
+242d b3			        OR E 
+242e ca b5 20		        JP Z,AHOW                       ;SAY "HOW?" 
+2431 c5			        PUSH BC                         ;ELSE SAVE SIGN 
+2432 cd ae 24		        CALL DIVIDE                     ;USE SUBROUTINE 
+2435 60			        LD H,B                          ;RESULT IN HL NOW 
+2436 69			        LD L,C 
+2437 c1			        POP BC                          ;GET SIGN BACK 
+2438			 
+2438 d1			XP35:   POP DE                          ;AND TEXT POINTER 
+2439 7c			        LD A,H                          ;HL MUST BE + 
+243a b7			        OR A 
+243b fa b4 20		        JP M,QHOW                       ;ELSE IT IS OVERFLOW 
+243e 78			        LD A,B 
+243f b7			        OR A 
+2440 fc cd 24		        CALL M,CHGSGN                   ;CHANGE SIGN IF NEEDED 
+2443 18 a4		        JR XP31                         ;LOOK FOR MORE TERMS 
+2445			 
+2445 21 4b 27		EXPR4:  LD HL,TAB4-1                    ;FIND FUNCTION IN TAB4 
+2448 c3 85 27		        JP EXEC                         ;AND GO DO IT 
+244b			 
+244b cd 4b 20		XP40:   CALL BRST38                     ;NO, NOT A FUNCTION 
+244e 38 05		        JR C,XP41                       ;NOR A VARIABLE 
+2450 7e			        LD A,(HL)                       ;VARIABLE 
+2451 23			        INC HL 
+2452 66			        LD H,(HL)                       ;VALUE IN HL 
+2453 6f			        LD L,A 
+2454 c9			        RET 
+2455			 
+2455 cd 8b 20		XP41:   CALL TSTNUM                     ;OR IS IT A NUMBER 
+2458 78			        LD A,B                          ;# OF DIGIT 
+2459 b7			        OR A 
+245a c0			        RET NZ                          ;OK 
+245b			 
+245b cd 16 20		PARN:   CALL BRST08 
+245e ..			        DM '(' 
+245f 09			        DB XP43-$-1 
+2460 cd 28 20		        CALL BRST18                     ;"(EXPR)" 
+2463 cd 16 20		        CALL BRST08 
+2466 ..			        DM ')' 
+2467 01			        DB XP43-$-1 
+2468			 
+2468 c9			XP42:   RET 
+2469			 
+2469 c3 1b 25		XP43:   JP QWHAT                        ;ELSE SAY: "WHAT?" 
+246c			 
+246c cd 5b 24		RND:    CALL PARN                       ;*** RND(EXPR) *** 
+246f 7c			        LD A,H                          ;EXPR MUST BE + 
+2470 b7			        OR A 
+2471 fa b4 20		        JP M,QHOW 
+2474 b5			        OR L                            ;AND NON-ZERO 
+2475 ca b4 20		        JP Z,QHOW 
+2478 d5			        PUSH DE                         ;SAVE BOTH 
+2479 e5			        PUSH HL 
+247a 2a 57 48		        LD HL,(RANPNT)                  ;GET MEMORY AS RANDOM 
+247d 11 eb 27		        LD DE,LSTROM                    ;NUMBER 
+2480 cd 31 20		        CALL BRST20 
+2483 38 03		        JR C,RAN1                       ;WRAP AROUND IF LAST 
+2485 21 0b 20		        LD HL,BSTART 
+2488			 
+2488 5e			RAN1:   LD E,(HL) 
+2489 23			        INC HL 
+248a 56			        LD D,(HL) 
+248b 22 57 48		        LD (RANPNT),HL 
+248e e1			        POP HL 
+248f eb			        EX DE,HL 
+2490 c5			        PUSH BC 
+2491 cd ae 24		        CALL DIVIDE                     ;RND (N)=MOD(M,N)+1 
+2494 c1			        POP BC 
+2495 d1			        POP DE 
+2496 23			        INC HL 
+2497 c9			        RET 
+2498			 
+2498 cd 5b 24		ABS:    CALL PARN                       ;*** ABS (EXPR) *** 
+249b 1b			        DEC DE 
+249c cd ca 24		        CALL CHKSGN                     ;CHECK SIGN 
+249f 13			        INC DE 
+24a0 c9			        RET 
+24a1			 
+24a1 2a 59 48		SIZE:   LD HL,(TXTUNF)                  ;*** SIZE *** 
+24a4 d5			        PUSH DE                         ;GET THE NUMBER OF FREE 
+24a5 eb			        EX DE,HL                        ;BYTES BETWEEN 'TXTUNF' 
+24a6 21 eb 27		        LD HL,VARBGN                    ;AND 'VARBGN' 
+24a9 cd c3 24		        CALL SUBDE 
+24ac d1			        POP DE 
+24ad c9			        RET 
+24ae			 
+24ae			;************************************************************* 
+24ae			; 
+24ae			; *** DIVIDE *** SUBDE *** CHKSGN *** CHGSGN *** & CKHLDE *** 
+24ae			; 
+24ae			; 'DIVIDE' DIVIDES HL BY DE, RESULT IN BC, REMAINDER IN HL 
+24ae			; 
+24ae			; 'SUBDE' SUBSTRACTS DE FROM HL 
+24ae			; 
+24ae			; 'CHKSGN' CHECKS SIGN OF HL.  IF +, NO CHANGE.  IF -, CHANGE 
+24ae			; SIGN AND FLIP SIGN OF B. 
+24ae			; 
+24ae			; 'CHGSGN' CHECKS SIGN N OF HL AND B UNCONDITIONALLY. 
+24ae			; 
+24ae			; 'CKHLDE' CHECKS SIGN OF HL AND DE.  IF DIFFERENT, HL AND DE 
+24ae			; ARE INTERCHANGED.  IF SAME SIGN, NOT INTERCHANGED.  EITHER 
+24ae			; CASE, HL DE ARE THEN COMPARED TO SET THE FLAGS. 
+24ae			;************************************************************* 
+24ae			 
+24ae e5			DIVIDE: PUSH HL                         ;*** DIVIDE *** 
+24af 6c			        LD L,H                          ;DIVIDE H BY DE 
+24b0 26 00		        LD H,00H 
+24b2 cd b9 24		        CALL DV1 
+24b5 41			        LD B,C                          ;SAVE RESULT IN B 
+24b6 7d			        LD A,L                          ;(REMAINDER+L)/DE 
+24b7 e1			        POP HL 
+24b8 67			        LD H,A 
+24b9			 
+24b9 0e ff		DV1:    LD C,0FFH                       ;RESULT IN C 
+24bb			 
+24bb 0c			DV2:    INC C                           ;DUMB ROUTINE 
+24bc cd c3 24		        CALL SUBDE                      ;DIVIDE BY SUBTRACT 
+24bf 30 fa		        JR NC,DV2                       ;AND COUNT 
+24c1 19			        ADD HL,DE 
+24c2 c9			        RET 
+24c3			 
+24c3 7d			SUBDE:  LD A,L                          ;*** SUBDE *** 
+24c4 93			        SUB E                           ;SUBSTRACT DE FROM 
+24c5 6f			        LD L,A                          ;HL 
+24c6 7c			        LD A,H 
+24c7 9a			        SBC A,D 
+24c8 67			        LD H,A 
+24c9 c9			        RET 
+24ca			 
+24ca 7c			CHKSGN: LD A,H                          ;*** CHKSGN *** 
+24cb b7			        OR A                            ;CHECK SIGN OF HL 
+24cc f0			        RET P 
+24cd			 
+24cd 7c			CHGSGN: LD A,H                          ;*** CHGSGN *** 
+24ce f5			        PUSH AF 
+24cf 2f			        CPL                             ;CHANGE SIGN OF HL 
+24d0 67			        LD H,A 
+24d1 7d			        LD A,L 
+24d2 2f			        CPL 
+24d3 6f			        LD L,A 
+24d4 23			        INC HL 
+24d5 f1			        POP AF 
+24d6 ac			        XOR H 
+24d7 f2 b4 20		        JP P,QHOW 
+24da 78			        LD A,B                          ;AND ALSO FLIP B 
+24db ee 80		        XOR 80H 
+24dd 47			        LD B,A 
+24de c9			        RET 
+24df			 
+24df 7c			CKHLDE: LD A,H                          ;SAME SIGN? 
+24e0 aa			        XOR D                           ;YES, COMPARE 
+24e1 f2 e5 24		        JP P,CK1                        ;NO, XCHANGE AND COMP 
+24e4 eb			        EX DE,HL 
+24e5			 
+24e5 cd 31 20		CK1:    CALL BRST20 
+24e8 c9			        RET 
+24e9			 
+24e9			;************************************************************* 
+24e9			; 
+24e9			; *** SETVAL *** FIN *** ENDCHK *** & ERROR (& FRIENDS) *** 
+24e9			; 
+24e9			; "SETVAL" EXPECTS A VARIABLE, FOLLOWED BY AN EQUAL SIGN AND 
+24e9			; THEN AN EXPR.  IT EVALUATES THE EXPR. AND SET THE VARIABLE 
+24e9			; TO THAT VALUE. 
+24e9			; 
+24e9			; "FIN" CHECKS THE END OF A COMMAND.  IF IT ENDED WITH ";", 
+24e9			; EXECUTION CONTINUES.  IF IT ENDED WITH A CR, IT FINDS THE 
+24e9			; NEXT LINE AND CONTINUE FROM THERE. 
+24e9			; 
+24e9			; "ENDCHK" CHECKS IF A COMMAND IS ENDED WITH CR.  THIS IS 
+24e9			; REQUIRED IN CERTAIN COMMANDS.  (GOTO, RETURN, AND STOP ETC.) 
+24e9			; 
+24e9			; "ERROR" PRINTS THE STRING POINTED BY DE (AND ENDS WITH CR). 
+24e9			; IT THEN PRINTS THE LINE POINTED BY 'CURRNT' WITH A "?" 
+24e9			; INSERTED AT WHERE THE OLD TEXT POINTER (SHOULD BE ON TOP 
+24e9			; OF THE STACK) POINTS TO.  EXECUTION OF TB IS STOPPED 
+24e9			; AND TBI IS RESTARTED.  HOWEVER, IF 'CURRNT' -> ZERO 
+24e9			; (INDICATING A DIRECT COMMAND), THE DIRECT COMMAND IS NOT 
+24e9			; PRINTED.  AND IF 'CURRNT' -> NEGATIVE # (INDICATING 'INPUT' 
+24e9			; COMMAND), THE INPUT LINE IS NOT PRINTED AND EXECUTION IS 
+24e9			; NOT TERMINATED BUT CONTINUED AT 'INPERR'. 
+24e9			; 
+24e9			; RELATED TO 'ERROR' ARE THE FOLLOWING: 
+24e9			; 'QWHAT' SAVES TEXT POINTER IN STACK AND GET MESSAGE "WHAT?" 
+24e9			; 'AWHAT' JUST GET MESSAGE "WHAT?" AND JUMP TO 'ERROR'. 
+24e9			; 'QSORRY' AND 'ASORRY' DO SAME KIND OF THING. 
+24e9			; 'AHOW' AND 'AHOW' IN THE ZERO PAGE SECTION ALSO DO THIS. 
+24e9			;************************************************************* 
+24e9			 
+24e9 cd 4b 20		SETVAL: CALL BRST38                     ;*** SETVAL *** 
+24ec da 1b 25		        JP C,QWHAT                      ;"WHAT?" NO VARIABLE 
+24ef e5			        PUSH HL                         ;SAVE ADDRESS OF VAR. 
+24f0 cd 16 20		        CALL BRST08                     ;PASS "=" SIGN 
+24f3 ..			        DM '=' 
+24f4 0a			        DB SETV1-$-1 
+24f5 cd 28 20		        CALL BRST18                     ;EVALUATE EXPR. 
+24f8 44			        LD B,H                          ;VALUE IS IN BC NOW 
+24f9 4d			        LD C,L 
+24fa e1			        POP HL                          ;GET ADDRESS 
+24fb 71			        LD (HL),C                       ;SAVE VALUE 
+24fc 23			        INC HL 
+24fd 70			        LD (HL),B 
+24fe c9			        RET 
+24ff			 
+24ff c3 1b 25		SETV1:  JP QWHAT                        ;NO "=" SIGN 
+2502			 
+2502 cd 16 20		FIN:    CALL BRST08                     ;*** FIN *** 
+2505 3b			        DB 3BH 
+2506 04			        DB FI1-$-1 
+2507 f1			        POP AF                          ;";", PURGE RET. ADDR. 
+2508 c3 72 21		        JP RUNSML                       ;CONTINUE SAME LINE 
+250b			 
+250b cd 16 20		FI1:    CALL BRST08                     ;NOT ";", IS IT CR? 
+250e 0d			        DB CR 
+250f 04			        DB FI2-$-1 
+2510 f1			        POP AF                          ;YES, PURGE RET. ADDR. 
+2511 c3 62 21		        JP RUNNXL                       ;RUN NEXT LINE 
+2514			 
+2514 c9			FI2:    RET                             ;ELSE RETURN TO CALLER 
+2515			 
+2515 cd 39 20		ENDCHK: CALL BRST28                     ;*** ENDCHK *** 
+2518 fe 0d		        CP CR                           ;END WITH CR? 
+251a c8			        RET Z                           ;OK, ELSE SAY: "WHAT?" 
+251b			 
+251b d5			QWHAT:  PUSH DE                         ;*** QWHAT *** 
+251c			 
+251c 11 c5 20		AWHAT:  LD DE,WHAT                      ;*** AWHAT *** 
+251f			 
+251f			ERROR_ROUTINE: 
+251f 97			        SUB A                           ;*** ERROR *** 
+2520 cd b3 25		        CALL PRTSTG                     ;PRINT 'WHAT?', 'HOW?' 
+2523 d1			        POP DE                          ;OR 'SORRY' 
+2524 1a			        LD A,(DE)                       ;SAVE THE CHARACTER 
+2525 f5			        PUSH AF                         ;AT WHERE OLD DE -> 
+2526 97			        SUB A                           ;AND PUT A 0 THERE 
+2527 12			        LD (DE),A 
+2528 2a 45 48		        LD HL,(CURRNT)                  ;GET CURRENT LINE # 
+252b e5			        PUSH HL 
+252c 7e			        LD A,(HL)                       ;CHECK THE VALUE 
+252d 23			        INC HL 
+252e b6			        OR (HL) 
+252f d1			        POP DE 
+2530 ca d3 20		        JP Z,RSTART                     ;IF ZERO, JUST RESTART 
+2533 7e			        LD A,(HL)                       ;IF NEGATIVE, 
+2534 b7			        OR A 
+2535 fa f6 22		        JP M,INPERR                     ;REDO INPUT 
+2538 cd 2e 26		        CALL PRTLN                      ;ELSE PRINT THE LINE 
+253b 1b			        DEC DE                          ;UPTO WHERE THE 0 IS 
+253c f1			        POP AF                          ;RESTORE THE CHARACTER 
+253d 12			        LD (DE),A 
+253e 3e 3f		        LD A,3FH                        ;PRINT A "?" 
+2540 cd 1f 20		        CALL BRST10 
+2543 97			        SUB A                           ;AND THE REST OF THE 
+2544 cd b3 25		        CALL PRTSTG                     ;LINE 
+2547 c3 d3 20		        JP RSTART                       ;THEN RESTART 
+254a			 
+254a d5			QSORRY: PUSH DE                         ;*** QSORRY *** 
+254b			 
+254b 11 cc 20		ASORRY: LD DE,SORRY                     ;*** ASORRY *** 
+254e 18 cf		        JR ERROR_ROUTINE 
+2550			 
+2550			;************************************************************* 
+2550			; 
+2550			; *** GETLN *** FNDLN (& FRIENDS) *** 
+2550			; 
+2550			; 'GETLN' READS A INPUT LINE INTO 'BUFFER'.  IT FIRST PROMPT 
+2550			; THE CHARACTER IN A (GIVEN BY THE CALLER), THEN IT FILLS 
+2550			; THE BUFFER AND ECHOS.  IT IGNORES LF'S AND NULLS, BUT STILL 
+2550			; ECHOS THEM BACK.  RUB-OUT IS USED TO CAUSE IT TO DELETE 
+2550			; THE LAST CHARACTER (IF THERE IS ONE), AND ALT-MOD IS USED TO 
+2550			; CAUSE IT TO DELETE THE WHOLE LINE AND START IT ALL OVER. 
+2550			; CR SIGNALS THE END OF A LINE, AND CAUSE 'GETLN' TO RETURN. 
+2550			; 
+2550			; 'FNDLN' FINDS A LINE WITH A GIVEN LINE # (IN HL) IN THE 
+2550			; TEXT SAVE AREA.  DE IS USED AS THE TEXT POINTER.  IF THE 
+2550			; LINE IS FOUND, DE WILL POINT TO THE BEGINNING OF THAT LINE 
+2550			; (I.E., THE LOW BYTE OF THE LINE #), AND FLAGS ARE NC & Z. 
+2550			; IF THAT LINE IS NOT THERE AND A LINE WITH A HIGHER LINE # 
+2550			; IS FOUND, DE POINTS TO THERE AND FLAGS ARE NC & NZ.  IF 
+2550			; WE REACHED THE END OF TEXT SAVE AREA AND CANNOT FIND THE 
+2550			; LINE, FLAGS ARE C & NZ. 
+2550			; 'FNDLN' WILL INITIALIZE DE TO THE BEGINNING OF THE TEXT SAVE 
+2550			; AREA TO START THE SEARCH.  SOME OTHER ENTRIES OF THIS 
+2550			; ROUTINE WILL NOT INITIALIZE DE AND DO THE SEARCH. 
+2550			; 'FNDLNP' WILL START WITH DE AND SEARCH FOR THE LINE #. 
+2550			; 'FNDNXT' WILL BUMP DE BY 2, FIND A CR AND THEN START SEARCH. 
+2550			; 'FNDSKP' USE DE TO FIND A CR, AND THEN START SEARCH. 
+2550			;************************************************************* 
+2550			 
+2550 cd 1f 20		GETLN:  CALL BRST10                     ;*** GETLN *** 
+2553 11 22 28		        LD DE,BUFFER                    ;PROMPT AND INIT. 
+2556			 
+2556 cd d5 26		GL1:    CALL CHKIO                      ;CHECK KEYBOARD 
+2559 28 fb		        JR Z,GL1                        ;NO INPUT, WAIT 
+255b fe 7f		        CP 7FH                          ;DELETE LAST CHARACTER? 
+255d 28 18		        JR Z,GL3                        ;YES 
+255f cd 1f 20		        CALL BRST10                     ;INPUT, ECHO BACK 
+2562 fe 0a		        CP 0AH                          ;IGNORE LF 
+2564 28 f0		        JR Z,GL1 
+2566 b7			        OR A                            ;IGNORE NULL 
+2567 28 ed		        JR Z,GL1 
+2569 fe 7d		        CP 7DH                          ;DELETE THE WHOLE LINE? 
+256b 28 17		        JR Z,GL4                        ;YES 
+256d 12			        LD (DE),A                       ;ELSE SAVE INPUT 
+256e 13			        INC DE                          ;AND BUMP POINTER 
+256f fe 0d		        CP 0DH                          ;WAS IT CR 
+2571 c8			        RET Z                           ;YES, END OF LINE 
+2572 7b			        LD A,E                          ;ELSE MORE FREE ROOM? 
+2573 fe 62		        CP BUFEND & 0FFH 
+2575 20 df		        JR NZ,GL1                       ;YES, GET NEXT INPUT 
+2577			 
+2577 7b			GL3:    LD A,E                          ;DELETE LAST CHARACTER 
+2578 fe 22		        CP BUFFER & 0FFH                ;BUT DO WE HAVE ANY? 
+257a 28 08		        JR Z,GL4                        ;NO, REDO WHOLE LINE 
+257c 1b			        DEC DE                          ;YES, BACKUP POINTER 
+257d 3e 5c		        LD A,5CH                        ;AND ECHO A BACK-SLASH 
+257f cd 1f 20		        CALL BRST10 
+2582 18 d2		        JR GL1                          ;GO GET NEXT INPUT 
+2584			 
+2584 3e 0d		GL4:    LD A,CR                         ;REDO ENTIRE LINE 
+2586			        EMT OUTC                        ;GIVE CR-LF AND ;CALL CROUT 
+2586 f7			        RST 30H 
+2587 16			        DEFB OUTC 
+2588			        ENDM 
+# End of macro EMT
+2588 3e 5e		        LD A,05EH                       ;CR, LF AND UP-ARROW 
+258a 18 c4		        JR GETLN 
+258c			 
+258c 7c			FNDLN:  LD A,H                          ;*** FNDLN *** 
+258d b7			        OR A                            ;CHECK SIGN OF HL 
+258e fa b4 20		        JP M,QHOW                       ;IT CANNOT BE - 
+2591 11 5b 48		        LD DE,TXTBGN                    ;INIT TEXT POINTER 
+2594			 
+2594			FNDLP:                                  ;*** FDLNP *** 
+2594 e5			FL1:    PUSH HL                         ;SAVE LINE # 
+2595 2a 59 48		        LD HL,(TXTUNF)                  ;CHECK IF WE PASSED END 
+2598 2b			        DEC HL 
+2599 cd 31 20		        CALL BRST20 
+259c e1			        POP HL                          ;GET LINE # BACK 
+259d d8			        RET C                           ;C,NZ PASSED END 
+259e 1a			        LD A,(DE)                       ;WE DID NOT, GET BYTE 1 
+259f 95			        SUB L                           ;IS THIS THE LINE? 
+25a0 47			        LD B,A                          ;COMPARE LOW ORDER 
+25a1 13			        INC DE 
+25a2 1a			        LD A,(DE)                       ;GET BYTE 2 
+25a3 9c			        SBC A,H                         ;COMPARE HIGH ORDER 
+25a4 38 04		        JR C,FL2                        ;NO, NOT THERE YET 
+25a6 1b			        DEC DE                          ;ELSE WE EITHER FOUND 
+25a7 b0			        OR B                            ;IT, OR IT IS NOT THERE 
+25a8 c9			        RET                             ;NC,Z;FOUND, NC,NZ:NO 
+25a9			 
+25a9 13			FNDNXT: INC DE                          ;FIND NEXT LINE 
+25aa			 
+25aa 13			FL2:    INC DE                          ;JUST PASSED BYTE 1 & 2 
+25ab			 
+25ab 1a			FNDSKP: LD A,(DE)                       ;*** FNDSKP *** 
+25ac fe 0d		        CP CR                           ;TRY TO FIND CR 
+25ae 20 fa		        JR NZ,FL2                       ;KEEP LOOKING 
+25b0 13			        INC DE                          ;FOUND CR, SKIP OVER 
+25b1 18 e1		        JR FL1                          ;CHECK IF END OF TEXT 
+25b3			 
+25b3			;************************************************************* 
+25b3			; 
+25b3			; *** PRTSTG *** QTSTG *** PRTNUM *** & PRTLN *** 
+25b3			; 
+25b3			; 'PRTSTG' PRINTS A STRING POINTED BY DE.  IT STOPS PRINTING 
+25b3			; AND RETURNS TO CALLER WHEN EITHER A CR IS PRINTED OR WHEN 
+25b3			; THE NEXT BYTE IS THE SAME AS WHAT WAS IN A (GIVEN BY THE 
+25b3			; CALLER).  OLD A IS STORED IN B, OLD B IS LOST. 
+25b3			; 
+25b3			; 'QTSTG' LOOKS FOR A BACK-ARROW, SINGLE QUOTE, OR DOUBLE 
+25b3			; QUOTE.  IF NONE OF THESE, RETURN TO CALLER.  IF BACK-ARROW, 
+25b3			; OUTPUT A CR WITHOUT A LF.  IF SINGLE OR DOUBLE QUOTE, PRINT 
+25b3			; THE STRING IN THE QUOTE AND DEMANDS A MATCHING UNQUOTE. 
+25b3			; AFTER THE PRINTING THE NEXT 3 BYTES OF THE CALLER IS SKIPPED 
+25b3			; OVER (USUALLY A JUMP INSTRUCTION. 
+25b3			; 
+25b3			; 'PRTNUM' PRINTS THE NUMBER IN HL.  LEADING BLANKS ARE ADDED 
+25b3			; IF NEEDED TO PAD THE NUMBER OF SPACES TO THE NUMBER IN C. 
+25b3			; HOWEVER, IF THE NUMBER OF DIGITS IS LARGER THAN THE # IN 
+25b3			; C, ALL DIGITS ARE PRINTED ANYWAY.  NEGATIVE SIGN IS ALSO 
+25b3			; PRINTED AND COUNTED IN, POSITIVE SIGN IS NOT. 
+25b3			; 
+25b3			; 'PRTLN' PRINTS A SAVED TEXT LINE WITH LINE # AND ALL. 
+25b3			;************************************************************* 
+25b3			 
+25b3 47			PRTSTG: LD B,A                          ;*** PRTSTG *** 
+25b4			 
+25b4 1a			PS1:    LD A,(DE)                       ;GET A CHARACTER 
+25b5 13			        INC DE                          ;BUMP POINTER 
+25b6 b8			        CP B                            ;SAME AS OLD A? 
+25b7 c8			        RET Z                           ;YES, RETURN 
+25b8 cd 1f 20		        CALL BRST10                     ;NO, NEXT 
+25bb fe 0d		        CP CR                           ;WAS IT A CR? 
+25bd 20 f5		        JR NZ,PS1                       ;NO, NEXT 
+25bf c9			        RET                             ;YES, RETURN 
+25c0			 
+25c0 cd 16 20		QTSTG:  CALL BRST08                     ;*** QTSTG *** 
+25c3 ..			        DM '"' 
+25c4 0f			        DB QT3-$-1 
+25c5 3e 22		        LD A,22H                        ;IT IS A " 
+25c7			 
+25c7 cd b3 25		QT1:    CALL PRTSTG                     ;PRINT UNTIL ANOTHER 
+25ca fe 0d		        CP CR                           ;WAS LAST ONE A CR? 
+25cc e1			        POP HL                          ;RETURN ADDRESS 
+25cd ca 62 21		        JP Z,RUNNXL                     ;WAS CR, RUN NEXT LINE 
+25d0			 
+25d0 23			QT2:    INC HL                          ;SKIP 3 BYTES ON RETURN 
+25d1 23			        INC HL 
+25d2 23			        INC HL 
+25d3 e9			        JP (HL)                         ;RETURN 
+25d4			 
+25d4 cd 16 20		QT3:    CALL BRST08                     ;IS IT A '? 
+25d7 27			        DB 27H 
+25d8 04			        DB QT4-$-1 
+25d9 3e 27		        LD A,27H                        ;YES, DO THE SAME 
+25db 18 ea		        JR QT1                          ;AS IN " 
+25dd			 
+25dd cd 16 20		QT4:    CALL BRST08                     ;IS IT BACK-ARROW? 
+25e0 5f			        DB 5FH 
+25e1 0b			        DB QT5-$-1 
+25e2 3e 8d		        LD A,8DH                        ;YES, CR WITHOUT LF 
+25e4 cd 1f 20		        CALL BRST10                     ;DO IT TWICE TO GIVE 
+25e7 cd 1f 20		        CALL BRST10                     ;TTY ENOUGH TIME 
+25ea e1			        POP HL                          ;RETURN ADDRESS 
+25eb 18 e3		        JR QT2 
+25ed			 
+25ed c9			QT5:    RET                             ;NONE OF ABOVE 
+25ee			 
+25ee 06 00		PRTNUM: LD B,00H                        ;*** PRTNUM *** 
+25f0 cd ca 24		        CALL CHKSGN                     ;CHECK SIGN 
+25f3 f2 f9 25		        JP P,PN1                        ;NO SIGN 
+25f6 06 2d		        LD B,'-'                        ;B=SIGN 
+25f8 0d			        DEC C                           ;'-' TAKES SPACE 
+25f9			 
+25f9 d5			PN1:    PUSH DE                         ;SAVE 
+25fa 11 0a 00		        LD DE,000AH                     ;DECIMAL 
+25fd d5			        PUSH DE                         ;SAVE AS FLAG 
+25fe 0d			        DEC C                           ;C=SPACES 
+25ff c5			        PUSH BC                         ;SAVE SIGN & SPACE 
+2600			 
+2600 cd ae 24		PN2:    CALL DIVIDE                     ;DIVIDE HL BY 10 
+2603 78			        LD A,B                          ;RESULT 0? 
+2604 b1			        OR C 
+2605 28 07		        JR Z,PN3                        ;YES, WE GOT ALL 
+2607 e3			        EX (SP),HL                      ;NO, SAVE REMAINDER 
+2608 2d			        DEC L                           ;AND COUNT SPACE 
+2609 e5			        PUSH HL                         ;HL IS OLD BC 
+260a 60			        LD H,B                          ;MOVE RESULT TO BC 
+260b 69			        LD L,C 
+260c 18 f2		        JR PN2                          ;AND DIVIDE BY 10 
+260e			 
+260e c1			PN3:    POP BC                          ;WE GOT ALL DIGITS IN 
+260f			 
+260f 0d			PN4:    DEC C                           ;THE STACK 
+2610 79			        LD A,C                          ;LOOK AT SPACE COUNT 
+2611 b7			        OR A 
+2612 fa 1c 26		        JP M,PN5                        ;NO LEADING BLANKS 
+2615 3e 20		        LD A,20H                        ;LEADING BLANKS 
+2617 cd 1f 20		        CALL BRST10 
+261a 18 f3		        JR PN4                          ;MORE? 
+261c			 
+261c 78			PN5:    LD A,B                          ;PRINT SIGN 
+261d b7			        OR A 
+261e c4 10 00		        CALL NZ,0010H 
+2621 5d			        LD E,L                          ;LAST REMAINDER IN E 
+2622			 
+2622 7b			PN6:    LD A,E                          ;CHECK DIGIT IN E 
+2623 fe 0a		        CP 0AH                          ;10 IS FLAG FOR NO MORE 
+2625 d1			        POP DE 
+2626 c8			        RET Z                           ;IF SO, RETURN 
+2627 c6 30		        ADD A,30H                       ;ELSE, CONVERT TO ASCII 
+2629 cd 1f 20		        CALL BRST10                     ;PRINT THE DIGIT 
+262c 18 f4		        JR PN6                          ;GO BACK FOR MORE 
+262e			 
+262e 1a			PRTLN:  LD A,(DE)                       ;*** PRTLN *** 
+262f 6f			        LD L,A                          ;LOW ORDER LINE # 
+2630 13			        INC DE 
+2631 1a			        LD A,(DE)                       ;HIGH ORDER 
+2632 67			        LD H,A 
+2633 13			        INC DE 
+2634 0e 04		        LD C,04H                        ;PRINT 4 DIGIT LINE # 
+2636 cd ee 25		        CALL PRTNUM 
+2639 3e 20		        LD A,20H                        ;FOLLOWED BY A BLANK 
+263b cd 1f 20		        CALL BRST10 
+263e 97			        SUB A                           ;AND THEN THE NEXT 
+263f cd b3 25		        CALL PRTSTG 
+2642 c9			        RET 
+2643			 
+2643			;************************************************************* 
+2643			; 
+2643			; *** MVUP *** MVDOWN *** POPA *** & PUSHA *** 
+2643			; 
+2643			; 'MVUP' MOVES A BLOCK UP FROM WHERE DE-> TO WHERE BC-> UNTIL 
+2643			; DE = HL 
+2643			; 
+2643			; 'MVDOWN' MOVES A BLOCK DOWN FROM WHERE DE-> TO WHERE HL-> 
+2643			; UNTIL DE = BC 
+2643			; 
+2643			; 'POPA' RESTORES THE 'FOR' LOOP VARIABLE SAVE AREA FROM THE 
+2643			; STACK 
+2643			; 
+2643			; 'PUSHA' STACKS THE 'FOR' LOOP VARIABLE SAVE AREA INTO THE 
+2643			; STACK 
+2643			;************************************************************* 
+2643			 
+2643 cd 31 20		MVUP:   CALL BRST20                     ;*** MVUP *** 
+2646 c8			        RET Z                           ;DE = HL, RETURN 
+2647 1a			        LD A,(DE)                       ;GET ONE BYTE 
+2648 02			        LD (BC),A                       ;MOVE IT 
+2649 13			        INC DE                          ;INCREASE BOTH POINTERS 
+264a 03			        INC BC 
+264b 18 f6		        JR MVUP                         ;UNTIL DONE 
+264d			 
+264d 78			MVDOWN: LD A,B                          ;*** MVDOWN *** 
+264e 92			        SUB D                           ;TEST IF DE = BC 
+264f c2 55 26		        JP NZ,MVD1                      ;NO, GO MOVE 
+2652 79			        LD A,C                          ;MAYBE, OTHER BYTE? 
+2653 93			        SUB E 
+2654 c8			        RET Z                           ;YES, RETURN 
+2655			 
+2655 1b			MVD1:   DEC DE                          ;ELSE MOVE A BYTE 
+2656 2b			        DEC HL                          ;BUT FIRST DECREASE 
+2657 1a			        LD A,(DE)                       ;BOTH POINTERS AND 
+2658 77			        LD (HL),A                       ;THEN DO IT 
+2659 18 f2		        JR MVDOWN                       ;LOOP BACK 
+265b			 
+265b c1			POPA:   POP BC                          ;BC = RETURN ADDR. 
+265c e1			        POP HL                          ;RESTORE LOPVAR, BUT 
+265d 22 4d 48		        LD (LOPVAR),HL                  ;=0 MEANS NO MORE 
+2660 7c			        LD A,H 
+2661 b5			        OR L 
+2662 28 10		        JR Z,PP1                        ;YEP, GO RETURN 
+2664 e1			        POP HL                          ;NOP, RESTORE OTHERS 
+2665 22 4f 48		        LD (LOPINC),HL 
+2668 e1			        POP HL 
+2669 22 51 48		        LD (LOPLMT),HL 
+266c e1			        POP HL 
+266d 22 53 48		        LD (LOPLN),HL 
+2670 e1			        POP HL 
+2671 22 55 48		        LD (LOPPT),HL 
+2674			 
+2674 c5			PP1:    PUSH BC                         ;BC = RETURN ADDR. 
+2675 c9			        RET 
+2676			 
+2676 21 63 28		PUSHA:  LD HL,STKLMT                    ;*** PUSHA *** 
+2679 cd cd 24		        CALL CHGSGN 
+267c c1			        POP BC                          ;BC=RETURN ADDRESS 
+267d 39			        ADD HL,SP                       ;IS STACK NEAR THE TOP? 
+267e d2 4a 25		        JP NC,QSORRY                    ;YES, SORRY FOR THAT 
+2681 2a 4d 48		        LD HL,(LOPVAR)                  ;ELSE SAVE LOOP VAR'S 
+2684 7c			        LD A,H                          ;BUT IF LOPVAR IS 0 
+2685 b5			        OR L                            ;THAT WILL BE ALL 
+2686 28 13		        JR Z,PU1 
+2688 2a 55 48		        LD HL,(LOPPT)                   ;ELSE, MORE TO SAVE 
+268b e5			        PUSH HL 
+268c 2a 53 48		        LD HL,(LOPLN) 
+268f e5			        PUSH HL 
+2690 2a 51 48		        LD HL,(LOPLMT) 
+2693 e5			        PUSH HL 
+2694 2a 4f 48		        LD HL,(LOPINC) 
+2697 e5			        PUSH HL 
+2698 2a 4d 48		        LD HL,(LOPVAR) 
+269b			 
+269b e5			PU1:    PUSH HL 
+269c c5			        PUSH BC                         ;BC = RETURN ADDR. 
+269d c9			        RET 
+269e			 
+269e			;************************************************************* 
+269e			; 
+269e			; *** OUTC *** & CHKIO *** 
+269e			; 
+269e			; THESE ARE THE ONLY I/O ROUTINES IN TBI. 
+269e			; 'OUTC' IS CONTROLLED BY A SOFTWARE SWITCH 'OCSW'.  IF OCSW=0 
+269e			; 'OUTC' WILL JUST RETURN TO THE CALLER.  IF OCSW IS NOT 0, 
+269e			; IT WILL OUTPUT THE BYTE IN A.  IF THAT IS A CR, A LF IS ALSO 
+269e			; SEND OUT.  ONLY THE FLAGS MAY BE CHANGED AT RETURN. ALL REG. 
+269e			; ARE RESTORED. 
+269e			; 
+269e			; 'CHKIO' CHECKS THE INPUT.  IF NO INPUT, IT WILL RETURN TO 
+269e			; THE CALLER WITH THE Z FLAG SET.  IF THERE IS INPUT, Z FLAG 
+269e			; IS CLEARED AND THE INPUT BYTE IS IN A.  HOWEVER, IF THE 
+269e			; INPUT IS A CONTROL-O, THE 'OCSW' SWITCH IS COMPLIMENTED, AND 
+269e			; Z FLAG IS RETURNED.  IF A CONTROL-C IS READ, 'CHKIO' WILL 
+269e			; RESTART TBI AND DO NOT RETURN TO THE CALLER. 
+269e			; 
+269e			; Do not modify these routines.  Routines requiring 
+269e			; modification are : SERIAL_INIT, RX_RDY, and TX_RDY. 
+269e			;************************************************************* 
+269e			 
+269e			BINIT: 
+269e			PATLOP: ;LD A,CR 
+269e			        ;EMT OUTC 
+269e			        ;DEC D 
+269e			        ;JR NZ,PATLOP 
+269e			        ;SUB A 
+269e			        ;LD A,FORM          ;CLEAR SCREEN 
+269e			        ;EMT OUTC 
+269e 3e 0d		        LD A,CR 
+26a0			        EMT OUTC 
+26a0 f7			        RST 30H 
+26a1 16			        DEFB OUTC 
+26a2			        ENDM 
+# End of macro EMT
+26a2 21 af 27		        LD HL,MSG1         ;OUTPUT VERSION 
+26a5			        EMT MSG 
+26a5 f7			        RST 30H 
+26a6 17			        DEFB MSG 
+26a7			        ENDM 
+# End of macro EMT
+26a7 3e 0d		        LD A,CR 
+26a9			        EMT OUTC 
+26a9 f7			        RST 30H 
+26aa 16			        DEFB OUTC 
+26ab			        ENDM 
+# End of macro EMT
+26ab 21 c3 27		        LD HL,MSG2 
+26ae			        EMT MSG 
+26ae f7			        RST 30H 
+26af 17			        DEFB MSG 
+26b0			        ENDM 
+# End of macro EMT
+26b0 3e 0d		        LD A,CR 
+26b2			        EMT OUTC 
+26b2 f7			        RST 30H 
+26b3 16			        DEFB OUTC 
+26b4			        ENDM 
+# End of macro EMT
+26b4 21 0b 20		        LD HL,BSTART 
+26b7 22 57 48		        LD (RANPNT),HL 
+26ba 21 5b 48		        LD HL,TXTBGN 
+26bd 22 59 48		        LD (TXTUNF),HL 
+26c0			        ;EMT 0 
+26c0 c3 d3 20		        JP RSTART 
+26c3			 
+26c3 20 02		BOUTC:  JR NZ,BOUTC2	    ;IT IS ON 
+26c5 f1			        POP AF              ;IT IS OFF 
+26c6 c9			        RET                 ;RESTORE AF AND RETURN 
+26c7			 
+26c7 f1			BOUTC2: POP AF              ;RESTORE THE REGISTER 
+26c8			        EMT OUTC 
+26c8 f7			        RST 30H 
+26c9 16			        DEFB OUTC 
+26ca			        ENDM 
+# End of macro EMT
+26ca fe 0d		        CP CR 
+26cc c0			        RET NZ 
+26cd 3e 0a		        LD A,LF 
+26cf cd 1f 20		        CALL BRST10 
+26d2 3e 0d		        LD A,CR 
+26d4 c9			        RET 
+26d5			 
+26d5			CHKIO:  EMT KBDIN			;CHECK IF CHARACTER AVAILABLE 
+26d5 f7			        RST 30H 
+26d6 02			        DEFB KBDIN 
+26d7			        ENDM 
+# End of macro EMT
+26d7 c8			        RET Z               ;RETURN IF NO CHARACTER AVAILABLE 
+26d8			 
+26d8 c5			        PUSH BC             ;IF IT'S A LF, IGNORE AND RETURN 
+26d9 47			        LD B,A              ; AS IF THERE WAS NO CHARACTER. 
+26da d6 0a		        SUB LF 
+26dc 28 0f		        JR Z,CHKIO2 
+26de 78			        LD A,B              ;OTHERWISE RESTORE 'A' AND 'BC' 
+26df c1			        POP BC              ; AND CONTINUE ON. 
+26e0			 
+26e0 fe 0f		        CP 0FH              ;IS IT CONTROL-0? 
+26e2 20 0e		        JR NZ,CI1           ;NO, MORE CHECKING 
+26e4 3a 44 48		        LD A,(OCSW)         ;CONTROL-0 FLIPS OCSW 
+26e7 2f			        CPL                 ;ON TO OFF, OFF TO ON 
+26e8 32 44 48		        LD (OCSW),A 
+26eb 18 e8		        JR CHKIO            ;GET ANOTHER INPUT 
+26ed			 
+26ed 3e 00		CHKIO2: LD A,00H            ;CLEAR A 
+26ef b7			        OR A                ;ZET THE Z-FLAG 
+26f0 c1			        POP BC              ;RESTORE THE 'BC' PAIR 
+26f1 c9			        RET                 ;RETURN WITH 'Z' SET. 
+26f2			 
+26f2 fe 03		CI1:    CP 03H              ;IS IT CONTROL-C? 
+26f4 c0			        RET NZ              ;NO, RETURN "NZ" 
+26f5 c3 d3 20		        JP RSTART           ;YES, RESTART TBI 
+26f8			 
+26f8			;************************************************************* 
+26f8			; 
+26f8			; *** TABLES *** DIRECT *** & EXEC *** 
+26f8			; 
+26f8			; THIS SECTION OF THE CODE TESTS A STRING AGAINST A TABLE. 
+26f8			; WHEN A MATCH IS FOUND, CONTROL IS TRANSFERED TO THE SECTION 
+26f8			; OF CODE ACCORDING TO THE TABLE. 
+26f8			; 
+26f8			; AT 'EXEC', DE SHOULD POINT TO THE STRING AND HL SHOULD POINT 
+26f8			; TO THE TABLE-1.  AT 'DIRECT', DE SHOULD POINT TO THE STRING. 
+26f8			; HL WILL BE SET UP TO POINT TO TAB1-1, WHICH IS THE TABLE OF 
+26f8			; ALL DIRECT AND STATEMENT COMMANDS. 
+26f8			; 
+26f8			; A '.' IN THE STRING WILL TERMINATE THE TEST AND THE PARTIAL 
+26f8			; MATCH WILL BE CONSIDERED AS A MATCH.  E.G., 'P.', 'PR.', 
+26f8			; 'PRI.', 'PRIN.', OR 'PRINT' WILL ALL MATCH 'PRINT'. 
+26f8			; 
+26f8			; THE TABLE CONSISTS OF ANY NUMBER OF ITEMS.  EACH ITEM 
+26f8			; IS A STRING OF CHARACTERS WITH BIT 7 SET TO 0 AND 
+26f8			; A JUMP ADDRESS STORED HI-LOW WITH BIT 7 OF THE HIGH 
+26f8			; BYTE SET TO 1. 
+26f8			; 
+26f8			; END OF TABLE IS AN ITEM WITH A JUMP ADDRESS ONLY.  IF THE 
+26f8			; STRING DOES NOT MATCH ANY OF THE OTHER ITEMS, IT WILL 
+26f8			; MATCH THIS NULL ITEM AS DEFAULT. 
+26f8			;************************************************************* 
+26f8			 
+26f8 ..			TAB1:   DM 'LIST'                       ;DIRECT COMMANDS 
+26fc			        DWA LIST 
+26fc a1			        DB   (LIST >> 8) + 128 
+26fd 8b			        DB   LIST & 0FFH 
+26fe			        ENDM 
+# End of macro DWA
+26fe ..			        DM 'RUN' 
+2701			        DWA RUN 
+2701 a1			        DB   (RUN >> 8) + 128 
+2702 5c			        DB   RUN & 0FFH 
+2703			        ENDM 
+# End of macro DWA
+2703 ..			        DM 'NEW' 
+2706			        DWA NEW 
+2706 a1			        DB   (NEW >> 8) + 128 
+2707 4d			        DB   NEW & 0FFH 
+2708			        ENDM 
+# End of macro DWA
+2708			 
+2708 ..			TAB2:   DM 'NEXT'                       ;DIRECT/STATEMENT 
+270c			        DWA NEXT 
+270c a2			        DB   (NEXT >> 8) + 128 
+270d 83			        DB   NEXT & 0FFH 
+270e			        ENDM 
+# End of macro DWA
+270e ..			        DM 'LET' 
+2711			        DWA LET 
+2711 a3			        DB   (LET >> 8) + 128 
+2712 5b			        DB   LET & 0FFH 
+2713			        ENDM 
+# End of macro DWA
+2713 ..			        DM 'IF' 
+2715			        DWA IFF 
+2715 a2			        DB   (IFF >> 8) + 128 
+2716 e5			        DB   IFF & 0FFH 
+2717			        ENDM 
+# End of macro DWA
+2717 ..			        DM 'GOTO' 
+271b			        DWA GOTO 
+271b a1			        DB   (GOTO >> 8) + 128 
+271c 7b			        DB   GOTO & 0FFH 
+271d			        ENDM 
+# End of macro DWA
+271d ..			        DM 'GOSUB' 
+2722			        DWA GOSUB 
+2722 a1			        DB   (GOSUB >> 8) + 128 
+2723 e5			        DB   GOSUB & 0FFH 
+2724			        ENDM 
+# End of macro DWA
+2724 ..			        DM 'RETURN' 
+272a			        DWA RETURN 
+272a a2			        DB   (RETURN >> 8) + 128 
+272b 07			        DB   RETURN & 0FFH 
+272c			        ENDM 
+# End of macro DWA
+272c ..			        DM 'REM' 
+272f			        DWA REM 
+272f a2			        DB   (REM >> 8) + 128 
+2730 e1			        DB   REM & 0FFH 
+2731			        ENDM 
+# End of macro DWA
+2731 ..			        DM 'FOR' 
+2734			        DWA FOR 
+2734 a2			        DB   (FOR >> 8) + 128 
+2735 22			        DB   FOR & 0FFH 
+2736			        ENDM 
+# End of macro DWA
+2736 ..			        DM 'INPUT' 
+273b			        DWA INPUT 
+273b a3			        DB   (INPUT >> 8) + 128 
+273c 00			        DB   INPUT & 0FFH 
+273d			        ENDM 
+# End of macro DWA
+273d ..			        DM 'PRINT' 
+2742			        DWA PRINT 
+2742 a1			        DB   (PRINT >> 8) + 128 
+2743 a2			        DB   PRINT & 0FFH 
+2744			        ENDM 
+# End of macro DWA
+2744 ..			        DM 'STOP' 
+2748			        DWA STOP 
+2748 a1			        DB   (STOP >> 8) + 128 
+2749 56			        DB   STOP & 0FFH 
+274a			        ENDM 
+# End of macro DWA
+274a			        DWA DEFLT 
+274a a3			        DB   (DEFLT >> 8) + 128 
+274b 56			        DB   DEFLT & 0FFH 
+274c			        ENDM 
+# End of macro DWA
+274c			 
+274c ..			TAB4:   DM 'RND'                        ;FUNCTIONS 
+274f			        DWA RND 
+274f a4			        DB   (RND >> 8) + 128 
+2750 6c			        DB   RND & 0FFH 
+2751			        ENDM 
+# End of macro DWA
+2751 ..			        DM 'ABS' 
+2754			        DWA ABS 
+2754 a4			        DB   (ABS >> 8) + 128 
+2755 98			        DB   ABS & 0FFH 
+2756			        ENDM 
+# End of macro DWA
+2756 ..			        DM 'SIZE' 
+275a			        DWA SIZE 
+275a a4			        DB   (SIZE >> 8) + 128 
+275b a1			        DB   SIZE & 0FFH 
+275c			        ENDM 
+# End of macro DWA
+275c			        DWA XP40 
+275c a4			        DB   (XP40 >> 8) + 128 
+275d 4b			        DB   XP40 & 0FFH 
+275e			        ENDM 
+# End of macro DWA
+275e			 
+275e ..			TAB5:   DM 'TO'                         ;"TO" IN "FOR" 
+2760			        DWA FR1 
+2760 a2			        DB   (FR1 >> 8) + 128 
+2761 32			        DB   FR1 & 0FFH 
+2762			        ENDM 
+# End of macro DWA
+2762			        DWA QWHAT 
+2762 a5			        DB   (QWHAT >> 8) + 128 
+2763 1b			        DB   QWHAT & 0FFH 
+2764			        ENDM 
+# End of macro DWA
+2764			 
+2764 ..			TAB6:   DM 'STEP'                       ;"STEP" IN "FOR" 
+2768			        DWA FR2 
+2768 a2			        DB   (FR2 >> 8) + 128 
+2769 3e			        DB   FR2 & 0FFH 
+276a			        ENDM 
+# End of macro DWA
+276a			        DWA FR3 
+276a a2			        DB   (FR3 >> 8) + 128 
+276b 43			        DB   FR3 & 0FFH 
+276c			        ENDM 
+# End of macro DWA
+276c			 
+276c ..			TAB8:   DM '>='                         ;RELATION OPERATORS 
+276e			        DWA XP11 
+276e a3			        DB   (XP11 >> 8) + 128 
+276f 6e			        DB   XP11 & 0FFH 
+2770			        ENDM 
+# End of macro DWA
+2770 ..			        DM '#' 
+2771			        DWA XP12 
+2771 a3			        DB   (XP12 >> 8) + 128 
+2772 74			        DB   XP12 & 0FFH 
+2773			        ENDM 
+# End of macro DWA
+2773 ..			        DM '>' 
+2774			        DWA XP13 
+2774 a3			        DB   (XP13 >> 8) + 128 
+2775 7a			        DB   XP13 & 0FFH 
+2776			        ENDM 
+# End of macro DWA
+2776 ..			        DM '=' 
+2777			        DWA XP15 
+2777 a3			        DB   (XP15 >> 8) + 128 
+2778 89			        DB   XP15 & 0FFH 
+2779			        ENDM 
+# End of macro DWA
+2779 ..			        DM '<=' 
+277b			        DWA XP14 
+277b a3			        DB   (XP14 >> 8) + 128 
+277c 81			        DB   XP14 & 0FFH 
+277d			        ENDM 
+# End of macro DWA
+277d ..			        DM '<' 
+277e			        DWA XP16 
+277e a3			        DB   (XP16 >> 8) + 128 
+277f 8f			        DB   XP16 & 0FFH 
+2780			        ENDM 
+# End of macro DWA
+2780			        DWA XP17 
+2780 a3			        DB   (XP17 >> 8) + 128 
+2781 95			        DB   XP17 & 0FFH 
+2782			        ENDM 
+# End of macro DWA
+2782			 
+2782 21 f7 26		DIRECT: LD HL,TAB1-1                    ;*** DIRECT *** 
+2785			EXEC:                                   ;*** EXEC *** 
+2785 cd 39 20		EX0:    CALL BRST28                     ;IGNORE LEADING BLANKS 
+2788 d5			        PUSH DE                         ;SAVE POINTER 
+2789			 
+2789 1a			EX1:    LD A,(DE)                       ;IF FOUND '.' IN STRING 
+278a 13			        INC DE                          ;BEFORE ANY MISMATCH 
+278b fe 23		        CP 23H                          ;WE DECLARE A MATCH 
+278d 28 12		        JR Z,EX3 
+278f 23			        INC HL                          ;HL->TABLE 
+2790 be			        CP (HL)                         ;IF MATCH, TEST NEXT 
+2791 28 f6		        JR Z,EX1 
+2793 3e 7f		        LD A,7FH                        ;ELSE SEE IF BIT 7 
+2795 1b			        DEC DE                          ;OF TABLE IS SET, WHICH 
+2796 be			        CP (HL)                         ;IS THE JUMP ADDR. (HI) 
+2797 38 0e		        JR C,EX5                        ;C:YES, MATCHED 
+2799			 
+2799 23			EX2:    INC HL                          ;NC:NO, FIND JUMP ADDR. 
+279a be			        CP (HL) 
+279b 30 fc		        JR NC,EX2 
+279d 23			        INC HL                          ;BUMP TO NEXT TAB. ITEM 
+279e d1			        POP DE                          ;RESTORE STRING POINTER 
+279f 18 e4		        JR EX0                          ;TEST AGAINST NEXT ITEM 
+27a1			 
+27a1 3e 7f		EX3:    LD A,7FH                        ;PARTIAL MATCH, FIND 
+27a3			 
+27a3 23			EX4:    INC HL                          ;JUMP ADDR., WHICH IS 
+27a4 be			        CP (HL)                         ;FLAGGED BY BIT 7 
+27a5 30 fc		        JR NC,EX4 
+27a7			 
+27a7 7e			EX5:    LD A,(HL)                       ;LOAD HL WITH THE JUMP 
+27a8 23			        INC HL                          ;ADDRESS FROM THE TABLE 
+27a9 6e			        LD L,(HL) 
+27aa e6 7f		        AND 7FH                         ;MASK OFF BIT 7 
+27ac 67			        LD H,A 
+27ad f1			        POP AF                          ;CLEAN UP THE GABAGE 
+27ae e9			        JP (HL)                         ;AND WE GO DO IT 
+27af			 
+27af ..			MSG1:   DEFM    'Z80 TINY BASIC 2.0g'   ;BOOT MESSAGE 
+27c2 ff			        DEFB    -1 
+27c3 ..			MSG2:   DEFM    'PORTED BY BRAINBYTE, 2021' 
+27dc ff			        DEFB    -1 
+27dd ..			BASV:   DEFM    'TB ROM LOADED'          ;VERSION NUMBER 
+27ea ff			        DEFB    -1 
+27eb			 
+27eb			;        ORG     RAM 
+27eb			 
+27eb			LSTROM:                                 ;ALL ABOVE CAN BE ROM 
+27eb			 
+27eb 00...		VARBGN: DS   55                         ;VARIABLE @(0) 
+2822 00...		BUFFER: DS   64                         ;INPUT BUFFER 
+2862 00...		BUFEND: DS   1                          ;BUFFER ENDS 
+2863 00...		STKLMT: DS   1                          ;TOP LIMIT FOR STACK 
+2864			 
+2864			        END 
+# End of file bb-tiny-basic.asm
+2864

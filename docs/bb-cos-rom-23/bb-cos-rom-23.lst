@@ -1,0 +1,2006 @@
+# File bb-cos-rom-23.asm
+0000			 
+0000			; RML pseudo-instructions 
+0000			 
+0000			EMT:    macro trap 
+0000			        RST 30H 
+0000			        DEFB trap 
+0000			        endm 
+0000			 
+0000			; '-1' instead of '-2' because we're generating displacement from second byte already 
+0000			CALR:   macro label 
+0000			        RST 28H 
+0000			        DEFB label-$-1 
+0000			        endm 
+0000			 
+0000			;--------------------------------------------------------- 
+0000			;************ R.M.L. CASSETTE OPERATING SYSTEM *********** 
+0000			;************  MONITOR VERSION 2.3 R  REV. 0   *********** 
+0000			;--------------------------------------------------------- 
+0000			;--------------------------------------------------------- 
+0000			 
+0000			;       "BY VIEWING NATURE, NATURE'S HANDMAID, ART, 
+0000			;        MAKES MIGHTY THINGS FROM SMALL BEGINNINGS GROW." 
+0000			;                                       DRYDEN 
+0000			 
+0000			        ORG     0 
+0000			NXTROM: EQU     1000H 
+0000			RAM:    EQU     4000H 
+0000			BASIC:  EQU     2000H 
+0000			 
+0000 c3 37 03		MONST:  JP      BEGIN           ;RST 00H (& POWER ON RESET) 
+0003 c3 71 03		        JP      CONTC           ;ADDR FOR REENTER CMD 
+0006 ..			MSGM:   DEFM    'TO' 
+0008 c3 2e 40		        JP      RST8            ;RST 08H 
+000b ..			MSGB:   DEFM    'BREAK' 
+0010 c3 31 40		        JP      RST10           ;RST 10H 
+0013 ..			MSGE:   DEFM    '?ERR?' 
+0018 c3 34 40		        JP      RST18           ;RST 18H 
+001b ..			MSGF:   DEFM    'FIRST' 
+0020 c3 37 40		        JP      RST20           ;RST 20H 
+0023 ..			MSGS:   DEFM    'START' 
+0028 c3 85 00		        JP RCALL                ;RST 28H (RELATIVE CALL) 
+002b ..			MSGL:   DEFM    'LAST' 
+002f ff			        DEFB    -1 
+0030 18 17		        JR      TRAP            ;RST 30H (TRAP CALL) 
+0032			 
+0032			;32H - THE NEXT TWO BYTES OF CODE ENABLE USER PROGRAMS TO 
+0032			;FIND OUT WHERE THEY HAVE BEEN LOADED, MAKING IT POSSIBLE TO 
+0032			;WRITE POSITION INDEPENDENT CODE (PIC).  THEY SHOULD BE 
+0032			;CALLED ('CALL 32H'); ON RETURN OLD HL IS ON THE STACK 
+0032			;AND HL CONTAINS THE ADDR OF THE CURRENT INSTRUCTION 
+0032			;I.E. THE ONE AFTER THE CALL. 
+0032			 
+0032 e3			        EX      (SP),HL 
+0033 e9			        JP      (HL) 
+0034			 
+0034 ..			MSGP:   DEFM    'WITH' 
+0038			 
+0038			;BREAKPOINT - COME HERE AFTER RST 38H (0FFH) 
+0038			;(INTERRUPTS IN MODE 1 ALSO COME HERE) 
+0038			;OLD PC ON THE STACK IS DECREMENTED, TO POINT 
+0038			;TO THE LOCATION OF THE BREAKPOINT AND THIS ADDRESS 
+0038			;IS ALSO PUT IN (MPTR) 
+0038			 
+0038 e3			BREAK:  EX      (SP),HL         ;HL <- ADDR OF NEXT INSTR 
+0039 2b			        DEC     HL              ;POINT TO BREAK POINT 
+003a 22 07 40		        LD      (MPTR),HL 
+003d e3			        EX      (SP),HL 
+003e e5			        PUSH    HL 
+003f f5			        PUSH    AF 
+0040 21 0b 00		        LD      HL,MSGB         ;ISSUE BREAK MESSAGE 
+0043 cd d1 05		        CALL    MOUT 
+0046 c3 d6 00		        JP      FPM             ;GO TO FP WITH HL/AF ON STACK 
+0049			 
+0049			;TRAP - A TRAP INSTRUCTION ('EMT'), SIMULATED BY RST 30H, 
+0049			;IS A TWO BYTE INSTRUCTION EQUIVALENT TO 'CALL'.  THE SECOND 
+0049			;BYTE CONTAINS THE TRAP CODE OF THE DESIRED TARGET ROUTINE, 
+0049			;AS FOLLOWS: 
+0049			; 
+0049			;         CODE          TARGET 
+0049			; 
+0049			;         -VE           ?ERR? 
+0049			;          0            MONITOR RESTART 
+0049			;         1-10          TRANSFER VECTORS ('VTV' - 'IN3') 
+0049			;        11-24          MONITOR ROUTINES IN 'TRTBL' 
+0049			;        25-127         JUMP THROUGH 'TRAPX' 
+0049			 
+0049 e5			TRAP:   PUSH    HL              ;SAVE HL AND AF 
+004a f5			        PUSH    AF 
+004b cd 92 00		        CALL    LDRET           ;HL <- RET ADDR, INC RET ADDR 
+004e 7e			        LD      A,(HL)          ;A <- TRAP CODE 
+004f b7			        OR      A 
+0050 28 b1		        JR      Z,MONST+3       ;TRAP 0 - RESTART 
+0052 fa f8 05		        JP      M,ERROR         ;-VE TRAP CODE MEANS ERROR 
+0055			 
+0055			;IF CODE IS > 24(10), JUMP THROUGH TRAP EXTENSION VECTOR 'TRAPX' 
+0055			;WITH THE CODE IN REG A AND AF, HL AND THE RET ADDR ON THE STACK. 
+0055			 
+0055 fe 19		        CP      25 
+0057 d2 3d 40		        JP      NC,TRAPX 
+005a d6 0b		        SUB     11 
+005c 38 1c		        JR      C,TR2 
+005e			 
+005e			;CODES 11 TO 24 (DECIMAL, INCLUSIVE) CALL THE MONITOR 
+005e			;ROUTINES WHOSE ADDRESSES ARE IN THE JUMP TABLE 'TRTBL' 
+005e			 
+005e 87			        ADD     A,A             ;A <- A * 2 
+005f 21 ba 07		        LD      HL,TRTBL        ;HL <- ADDR OF DISPATCH TABLE 
+0062 85			        ADD     A,L             ;HL <- ADDR OF ADDR 
+0063 6f			        LD      L,A 
+0064 18 02		        JR      TR1             ;AVOID NMI 
+0066			 
+0066 18 3a		        JR      NMI             ;LOCATION 66H 
+0068			 
+0068 7e			TR1:    LD      A,(HL)          ;HL <- DISPATCH ADDR 
+0069 23			        INC     HL 
+006a 66			        LD      H,(HL) 
+006b 6f			        LD      L,A 
+006c 18 14		        JR      TR3 
+006e			 
+006e			;.CHAN (EMT CHAN) ALLOWS CHANNEL TO BE PASSED IN REGISTER C 
+006e			 
+006e e5			.CHAN:  PUSH    HL 
+006f f5			        PUSH    AF 
+0070 79			        LD      A,C             ;A <- CHANNEL 
+0071 fe 01		        CP      1               ;CHECK THAT IT IS IN THE 
+0073 30 01		        JR      NC,.CHN2        ; RANGE 1 TO 10 
+0075 ff			.CHN1:  RST     38H             ;ELSE BREAK 
+0076 d6 0b		.CHN2:  SUB     11 
+0078 30 fb		        JR      NC,.CHN1 
+007a			 
+007a			;CODES 1 TO 10 (DECIMAL, INCLUSIVE) REACH THE TRANSFER VECTORS 
+007a			 
+007a 6f			TR2:    LD      L,A             ;A <- A * 3 
+007b 87			        ADD     A,A 
+007c 85			        ADD     A,L 
+007d 21 2e 40		        LD      HL,IN3+3        ;CALCULATE VECTOR ADDR 
+0080 85			        ADD     A,L 
+0081 6f			        LD      L,A 
+0082 f1			TR3:    POP     AF              ;RESTORE AF AND HL 
+0083 e3			        EX      (SP),HL 
+0084 c9			        RET                     ;GO TO ADDR 
+0085			 
+0085			;RCALL - CALL RELATIVE ('CALR') IS A TWO BYTE PSEUDO- 
+0085			;INSTRUCTION SIMULATED BY RST 28H.  THE SECOND BYTE 
+0085			;CONTAINS THE OFFSET TO THE TARGET ADDR WITH THE SAME 
+0085			;CONVENTION AS THE RELATIVE JUMPS (I.E. TARGET-$-1). 
+0085			;THIS CODE CONVERTS THE OFFSET TO AN ABSOLUTE ADDR, THEN 
+0085			;JUMPS THERE, WITH THE UPDATED RETURN ADDR ON THE STACK. 
+0085			 
+0085 e5			RCALL:  PUSH    HL              ;SAVE HL AND AF 
+0086 f5			        PUSH    AF 
+0087 cd 92 00		        CALL    LDRET           ;HL <- ADDR OF OFFSET 
+008a d5			        PUSH    DE              ;SAVE DE 
+008b cd 65 02		        CALL    RTOA            ;HL <- HL + (HL) + 1 
+008e d1			        POP     DE              ;RESTORE DE, AF AND HL 
+008f f1			        POP     AF 
+0090 e3			        EX      (SP),HL 
+0091 c9			        RET                     ;GO TO CALL 
+0092			 
+0092			;LDRET - LOAD HL WITH PREVIOUS RETURN ADDR, INCREMENT 
+0092			;RETURN ADDR.  ASSUMES HL AND AF ARE ALREADY ON THE STACK. 
+0092			;DESTROYS CY FLAG 
+0092			 
+0092 d5			LDRET:  PUSH    DE 
+0093 21 08 00		        LD      HL,8            ;HL <- POINTER TO STACK 
+0096 39			        ADD     HL,SP 
+0097 5e			        LD      E,(HL)          ;DE <- RETURN ADDR 
+0098 23			        INC     HL 
+0099 56			        LD      D,(HL) 
+009a 13			        INC     DE              ;INC RETURN AND STORE 
+009b 72			        LD      (HL),D 
+009c 2b			        DEC     HL 
+009d 73			        LD      (HL),E 
+009e 1b			        DEC     DE              ;CORRECT ADDR 
+009f eb			        EX      DE,HL           ;HL <- ADDR 
+00a0 d1			        POP     DE 
+00a1 c9			        RET 
+00a2			 
+00a2			;NMI - COME HERE AFTER NMI CAUSED BY RESET BUTTON OR 
+00a2			;SINGLE STEP LOGIC. 
+00a2			;IF RESET, WAIT FOR BUTTON RELEASE THEN RESTART MONITOR 
+00a2			;ELSE DISABLE SINGLE STEP BIT IN 'MASK' AND CHECK NMI FLAG: 
+00a2			;IF (SSFLG) = 'R', JUMP TO USER PROG THROUGH NMIX, 
+00a2			;ELSE IF (SSFLG) = 'S' (MONITOR SINGLE STEP) GO TO FP 
+00a2			;ELSE TREAT AS RESET BUTTON GLITCH AND RESTART MONITOR 
+00a2			 
+00a2 e5			NMI:    PUSH    HL 
+00a3 f5			        PUSH    AF 
+00a4 21 fc 0f		        LD      HL,PORT0        ;DISABLE SINGLE STEP IF SET 
+00a7 36 92		        LD      (HL),MKINIT 
+00a9 23			        INC     HL              ;POINT TO PORT 1 
+00aa 23			        INC     HL 
+00ab cb 56		        BIT     RESET,(HL)      ;WAS IT RESET BUTTON? 
+00ad 20 09		        JR      NZ,NMI2         ;IF NOT 
+00af			 
+00af cb 56		NMI1:   BIT     RESET,(HL)      ;ELSE WAIT FOR BUTTON RELEASE 
+00b1 28 fc		        JR      Z,NMI1 
+00b3 af			        XOR     A               ;MAKE SURE SS FLG IS CLEAR 
+00b4 32 04 40		        LD      (SSFLG),A 
+00b7 c7			NMI1A:  RST     0               ;GO TO POWER ON ENTRY 
+00b8			 
+00b8 21 03 40		NMI2:   LD      HL,MASK         ;NOT RESET BUTTON, 
+00bb cb ce		        SET     SINGLE,(HL)     ;(CLEAR SINGLE STEP ANYWAY) 
+00bd 23			        INC     HL              ;POINT TO SS FLG 
+00be 7e			        LD      A,(HL)          ;TEST FLAG 
+00bf 36 00		        LD      (HL),0          ;THEN CLEAR IT 
+00c1 d6 52		        SUB     'R' 
+00c3 ca 3a 40		        JP      Z,NMIX          ;IF FLG = 'R' -> NMIX 
+00c6 3d			        DEC     A               ;ELSE IF FLG NOT = 'S' 
+00c7 20 ee		        JR      NZ,NMI1A        ; TREAT AS GLITCH ON RESET 
+00c9 f1			        POP     AF              ;ELSE MUST BE MONITOR SS 
+00ca e1			        POP     HL 
+00cb 18 11		        JR      FPM1 
+00cd			 
+00cd			 
+00cd			;GETC - GET A CHARACTER FROM KEYBOARD 
+00cd			;WATCH FOR CTRL Z 
+00cd			 
+00cd			GETC:   EMT     KBDIN 
+00cd f7			        RST 30H 
+00ce 02			        DEFB KBDIN 
+00cf			        endm 
+# End of macro EMT
+00cf 28 fc		        JR      Z,GETC          ;NO CHAR AVAILABLE 
+00d1 fe 1a		        CP      CTRLZ 
+00d3 c0			        RET     NZ              ;DROP THRO' ON CTRL Z 
+00d4			 
+00d4			;HERE BEGINS THE FRONT PANEL EMULATOR 
+00d4			; 
+00d4			;       "AND NOW I SEE WITH EYE SERENE 
+00d4			;        THE VERY PULSE OF THE MACHINE." 
+00d4			;                       WILLIAM WORDSWORTH 
+00d4			; 
+00d4			;SAVE THE CURRENT REGS ON THE MONITOR STACK 
+00d4			;IN THE ORDER:  PC/SP/IY/IX/HL/DE/BC/AF 
+00d4			 
+00d4 e5			        PUSH    HL              ;SAVE AS 'BREAK' DOES 
+00d5 f5			        PUSH    AF 
+00d6 d5			FPM:    PUSH    DE              ;ENTRY FROM 'BREAK' 
+00d7 c5			        PUSH    BC 
+00d8			        EMT     GRAFIX          ;CLEAR SCREEN 
+00d8 f7			        RST 30H 
+00d9 0d			        DEFB GRAFIX 
+00da			        endm 
+# End of macro EMT
+00da c1			        POP     BC 
+00db d1			        POP     DE 
+00dc f1			        POP     AF 
+00dd e1			        POP     HL 
+00de			 
+00de e5			FPM1:   PUSH    HL              ;MAKE ROOM FOR SP 
+00df fd e5		        PUSH    IY              ;SAVE ALL 
+00e1 dd e5		        PUSH    IX 
+00e3 e5			FPM2:   PUSH    HL              ;ENTRY FROM 'SWITCH' 
+00e4 d5			        PUSH    DE 
+00e5 c5			        PUSH    BC 
+00e6 f5			        PUSH    AF 
+00e7 21 10 00		        LD      HL,16           ;CALCULATE OLD SP 
+00ea 39			        ADD     HL,SP 
+00eb 54			        LD      D,H             ;DE <- OLD SP 
+00ec 5d			        LD      E,L 
+00ed 2b			        DEC     HL 
+00ee 2b			        DEC     HL 
+00ef 2b			        DEC     HL 
+00f0 72			        LD      (HL),D          ;SAVE OLD SP AT (HL) 
+00f1 2b			        DEC     HL 
+00f2 73			        LD      (HL),E 
+00f3			 
+00f3			;RDIS - DISPLAY THE REGISTERS 
+00f3			;THIS IS THE RE-ENTRY POINT IN FP MODE: ITS ADDR IS PUSHED 
+00f3			;AT 'CMD:' AND MOST FP ROUTINES RETURN HERE WITH A 'RET'. 
+00f3			;IX STARTS BY POINTING TO THE TOP OF THE SAVED REGS (OLD PC) 
+00f3			;AND ENDS 2 BYTES BELOW SAVED AF. (RPTR) IS THE OFFSET 
+00f3			;(RANGE 2-16) FROM THE LATTER POSITION OF IX TO THE CURRENT 
+00f3			;REG. IY IS A POINTER TO THE REG NAME STRING. 
+00f3			 
+00f3 fd 21 80 01	RDIS:   LD      IY,RNSTR        ;IY <- PTR TO REG NAMES 
+00f7 dd 21 0e 00	        LD      IX,14           ;IX <- PTR TO TOP OF SAVED REGS 
+00fb dd 39		        ADD     IX,SP 
+00fd 3e 21		        LD      A,'!'           ;INDICATE FP MODE 
+00ff cd 3f 05		        CALL    AOUT            ;AFTER CR 
+0102			        EMT     OPNWT           ;### 
+0102 f7			        RST 30H 
+0103 0b			        DEFB OPNWT 
+0104			        endm 
+# End of macro EMT
+0104 21 16 0a		        LD      HL,0A16H 
+0107 36 5e		        LD      (HL),UPARR 
+0109 21 8a 0b		        LD      HL,0B8AH 
+010c 36 5d		        LD      (HL),RARR 
+010e 21 92 0b		        LD      HL,0B92H 
+0111 36 5b		        LD      (HL),LARR 
+0113 21 40 08		        LD      HL,840H         ;HL <- START OF REG DISPLAY 
+0116 06 08		        LD      B,8 
+0118 3a 09 40		RD1:    LD      A,(RPTR)        ;TEST WHICH REG IS POINTED TO 
+011b cb 2f		        SRA     A               ;(RPTR) = 2*B 
+011d b8			        CP      B 
+011e 36 80		        LD      (HL),BLANK      ;ASSUME IT'S NOT THIS ONE 
+0120 20 02		        JR      NZ,RD2          ;IF IT'S NOT 
+0122 36 5d		        LD      (HL),RARR       ;ELSE DISPLAY ARROW 
+0124 23			RD2:    INC     HL              ;LEAVE A SPACE 
+0125 37			        SCF 
+0126 cd 74 01		        CALL    RNAM            ;OUTPUT REG NAME 
+0129 cd 74 01		        CALL    RNAM 
+012c 3e 04		        LD      A,4             ;MIGHT IT BE THE ALT SET? 
+012e b8			        CP      B 
+012f cc ff 04		        CALL    Z,CLSOPN        ;###PAUSE IF B = 4 
+0132 38 0a		        JR      C,RD3           ;IF PC/SP/IY/IX 
+0134 3a 0a 40		        LD      A,(RSET)        ;(RSET) = 0 FOR STANDARD SET 
+0137 b7			        OR      A 
+0138 36 80		        LD      (HL),BLANK      ;ASSUME NOT 
+013a 28 02		        JR      Z,RD3           ;IF STANDARD SET 
+013c 36 27		        LD      (HL),'''        ;ELSE APPEND A ' 
+013e 23			RD3:    INC     HL              ;LEAVE A GAP 
+013f 23			        INC     HL 
+0140 dd 56 01		        LD      D,(IX+1)        ;DE <- REG CONTENTS 
+0143 dd 5e 00		        LD      E,(IX+0) 
+0146 dd 2b		        DEC     IX 
+0148 dd 2b		        DEC     IX 
+014a cd 94 06		        CALL    .DEOUT          ;DISPLAY CONTENTS 
+014d 10 0c		        DJNZ    RD5             ;FOR ALL BUT AF, ALSO DISPLAY (REG) 
+014f			 
+014f 23			        INC     HL              ;AF, DISPLAY FLAGS 
+0150 7b			        LD      A,E             ;A <- FLAG REG 
+0151 06 08		        LD      B,8 
+0153 17			RD4:    RLA                     ;CY <- NEXT FLAG 
+0154 cd 74 01		        CALL    RNAM            ;DISPLAY FLAG IF CY SET 
+0157 10 fa		        DJNZ    RD4 
+0159 18 3d		        JR      MDIS 
+015b			 
+015b e5			RD5:    PUSH    HL              ;SAVE VT ADDR 
+015c 21 fc ff		        LD      HL,-4           ;DISPLAY (REG-4) TO (REG+3) 
+015f 19			        ADD     HL,DE 
+0160 eb			        EX      DE,HL           ;(DE) WILL BE DISPLAYED 
+0161 e1			        POP     HL 
+0162 48			        LD      C,B             ;SAVE B 
+0163 06 08		        LD      B,8 
+0165 23			RD6:    INC     HL 
+0166 1a			        LD      A,(DE)          ;OUTPUT (REG) 
+0167 13			        INC     DE 
+0168 cd 99 06		        CALL    .BYTEO 
+016b 10 f8		        DJNZ    RD6 
+016d 41			        LD      B,C             ;RESTORE B 
+016e 11 1f 00		        LD      DE,40H-33       ;DE <- DISTANCE TO NEXT LINE ON VT 
+0171 19			        ADD     HL,DE           ;UPDATE VT ADDR 
+0172 18 a4		        JR      RD1 
+0174			 
+0174 36 80		RNAM:   LD      (HL),BLANK 
+0176 30 04		        JR      NC,RN1          ;SKIP IF NO CARRY 
+0178 fd 4e 00		        LD      C,(IY+0)        ;ELSE OUTPUT NEXT CHAR FROM RNSTR 
+017b 71			        LD      (HL),C 
+017c 23			RN1:    INC     HL 
+017d fd 23		        INC     IY 
+017f c9			        RET 
+0180			 
+0180 ..			RNSTR:  DEFM    'PCSPIYIXHLDEBCAFSZ H VNC' 
+0198			 
+0198			;MDIS - DISPLAY MEMORY AROUND MPTR 
+0198			 
+0198 cd ff 04		MDIS:   CALL    CLSOPN          ;###PAUSE TO AVOID BLINK 
+019b 2a 07 40		        LD      HL,(MPTR)       ;DE <- (MPTR)-12 
+019e 11 f4 ff		        LD      DE,-12 
+01a1 19			        ADD     HL,DE 
+01a2 eb			        EX      DE,HL 
+01a3 21 80 0a		        LD      HL,0A80H        ;HL <- START OF DISPLAY 
+01a6 06 04		        LD      B,4             ;4 COLUMNS 
+01a8 48			MD1:    LD      C,B             ;COUNTED BY C 
+01a9 79			        LD      A,C             ;###IF C = 2 
+01aa fe 02		        CP      2               ;### 
+01ac cc ff 04		        CALL    Z,CLSOPN        ;###PAUSE TO AVOID BLINK 
+01af 06 08		        LD      B,8             ;8 ROWS 
+01b1 cd 94 06		MD2:    CALL    .DEOUT          ;OUTPUT ADDRESS 
+01b4 23			        INC     HL              ;LEAVE A BLANK 
+01b5 1a			        LD      A,(DE)          ;GET CONTENT 
+01b6 cd 99 06		        CALL    .BYTEO          ;OUTPUT IT 
+01b9 13			        INC     DE              ;POINT TO NEXT 
+01ba d5			        PUSH    DE 
+01bb 11 39 00		        LD      DE,57           ;BUMP VT POINTER 
+01be 19			        ADD     HL,DE 
+01bf d1			        POP     DE 
+01c0 10 ef		        DJNZ    MD2             ;REPEAT FOR 8 ROWS 
+01c2 d5			        PUSH    DE 
+01c3 11 0b fe		        LD      DE,-200H+11     ;START OF NEXT COLUMN 
+01c6 19			        ADD     HL,DE 
+01c7 d1			        POP     DE 
+01c8 41			        LD      B,C 
+01c9 10 dd		        DJNZ    MD1             ;REPEAT FOR 4 COLUMNS 
+01cb			        EMT     CLOSE           ;### 
+01cb f7			        RST 30H 
+01cc 0c			        DEFB CLOSE 
+01cd			        endm 
+# End of macro EMT
+01cd			 
+01cd			;CMD - GET MODIFIED VALUE FOR MPTR OR REG, PARSE COMMAND 
+01cd			 
+01cd 21 f3 00		CMD:    LD      HL,RDIS         ;RETURN ADDRESS 
+01d0 e5			        PUSH    HL 
+01d1			        EMT     GETHEX 
+01d1 f7			        RST 30H 
+01d2 13			        DEFB GETHEX 
+01d3			        endm 
+# End of macro EMT
+01d3 3e 2e		        LD      A,'.'           ;IF TERMINATOR WAS '.' 
+01d5 90			        SUB     B               ;THIS IS A REG OPERATION 
+01d6 28 30		        JR      Z,SETR 
+01d8 79			        LD      A,C             ;GET NUMBER OF HEX CHARS 
+01d9 b7			        OR      A 
+01da 28 09		        JR      Z,CMD1          ;IF THERE WERE NONE 
+01dc 7d			        LD      A,L             ;A <- BYTE 
+01dd 2a 07 40		        LD      HL,(MPTR) 
+01e0			        EMT     OPNWT           ;###IN CASE (MPTR) IS VT 
+01e0 f7			        RST 30H 
+01e1 0b			        DEFB OPNWT 
+01e2			        endm 
+# End of macro EMT
+01e2 77			        LD      (HL),A          ;STORE IT 
+01e3			        EMT     CLOSE           ;### 
+01e3 f7			        RST 30H 
+01e4 0c			        DEFB CLOSE 
+01e5			        endm 
+# End of macro EMT
+01e5 78			CMD1:   LD      A,B             ;A <- TERMINATOR 
+01e6 21 30 02		        LD      HL,TBL1 
+01e9 16 00		        LD      D,0 
+01eb 42			        LD      B,D 
+01ec 0e 08		        LD      C,8             ;BC <- TBL LENGTH (1ST) 
+01ee			        CALR    LOOKUP 
+01ee ef			        RST 28H 
+01ef 37			        DEFB LOOKUP-$-1 
+01f0			        endm 
+# End of macro CALR
+01f0 20 0c		        JR      NZ,CMD2         ;IF NO MATCH 
+01f2 2a 07 40		        LD      HL,(MPTR)       ;UPDATE MPTR 
+01f5 01 f0 ff		        LD      BC,-16          ;VALUES FROM TBL ARE OFFSET 
+01f8 09			        ADD     HL,BC           ; TO SAVE INSTRUCTIONS 
+01f9 19			        ADD     HL,DE           ;ADD UPDATE 
+01fa 22 07 40		SVM:    LD      (MPTR),HL 
+01fd c9			        RET 
+01fe			 
+01fe 0e 18		CMD2:   LD      C,TBL2LN        ;BC <- TBL LENGTH (2ND) 
+0200			        CALR    LOOKUP 
+0200 ef			        RST 28H 
+0201 25			        DEFB LOOKUP-$-1 
+0202			        endm 
+# End of macro CALR
+0202 e0			        RET     PO              ;NOTHING FOUND 
+0203 21 50 02		        LD      HL,SETM         ;CALCULATE REL ADDR 
+0206 19			        ADD     HL,DE 
+0207 e9			        JP      (HL) 
+0208			 
+0208			;SETR - MODIFY REG OR MOVE REG POINTER 
+0208			 
+0208 57			SETR:   LD      D,A             ;CLEAR D FOR LATER (A = 0) 
+0209 b9			        CP      C               ;TEST IF ANY HEX 
+020a 3a 09 40		        LD      A,(RPTR)        ;A <- OFFSET FROM IX TO REG 
+020d 28 0a		        JR      Z,SR1           ;IF NO HEX 
+020f 5f			        LD      E,A             ;ELSE LOAD REG 
+0210 dd 19		        ADD     IX,DE           ;POINT TO REG 
+0212 dd 74 01		        LD      (IX+1),H        ;REG <- HL 
+0215 dd 75 00		        LD      (IX+0),L 
+0218 c9			        RET                     ;OR 'NOP' 
+0219 3d			SR1:    DEC     A               ;DECR OFFSET, TO NEXT REG 
+021a 3d			        DEC     A 
+021b 20 02		        JR      NZ,SR2          ;UNLESS OFF THE BOTTOM 
+021d 3e 10		        LD      A,16            ;POINT TO PC 
+021f fe 0e		SR2:    CP      14              ;SKIP SP 
+0221 28 f6		        JR      Z,SR1 
+0223 32 09 40		        LD      (RPTR),A        ;SAVE OFFSET 
+0226 c9			        RET 
+0227			 
+0227			;LOOKUP - SEARCH TABLE POINTED TO BY HL FOR BC BYTES, 
+0227			;RETURNING ENTRY IN E 
+0227			;Z SET FOR A MATCH, P ODD IF OFF THE END 
+0227			 
+0227 ed a1		LOOKUP: CPI 
+0229 5e			        LD      E,(HL) 
+022a c8			        RET     Z               ;IF MATCH 
+022b ed a1		        CPI 
+022d e0			        RET     PO              ;IF OFF THE END 
+022e 18 f7		        JR      LOOKUP 
+0230			 
+0230			;TBL - FRONT PANEL SWITCHES 
+0230			 
+0230 0d			TBL1:   DEFB    CR              ;FORWARD ONE 
+0231 11			        DEFB    17 
+0232 ..			        DEFM    '-'             ;BACK ONE 
+0233 0f			        DEFB    15 
+0234 0a			        DEFB    LF              ;FORWARD EIGHT 
+0235 18			        DEFB    24 
+0236 ..			        DEFM    '/'             ;BACK EIGHT 
+0237 08			        DEFB    8 
+0238 ..			TBL2:   DEFM    'G'             ;GET AND FIND PATTERN 
+0239 87			        DEFB    GETPAT-SETM 
+023a ..			        DEFM    'H'             ;HEX CALCULATOR 
+023b 6b			        DEFB    HEXCAL-SETM 
+023c ..			        DEFM    'I'             ;MPTR <- CURRENT WORD 
+023d 05			        DEFB    IND-SETM 
+023e ..			        DEFM    'J'             ;CLEAR STACK, JUMP 
+023f c3			        DEFB    FPJMP-SETM 
+0240 ..			        DEFM    'K'             ;CONTINUE EXECUTION 
+0241 39			        DEFB    CONTIN-SETM 
+0242 ..			        DEFM    'M'             ;SET MPTR 
+0243 00			        DEFB    SETM-SETM 
+0244 ..			        DEFM    'N'             ;FIND NEXT PATTERN 
+0245 9e			        DEFB    GPNXT-SETM 
+0246 ..			        DEFM    'P'             ;FILL AND TEST MEMORY 
+0247 47			        DEFB    PUT-SETM 
+0248 ..			        DEFM    'R'             ;MPTR <- MPTR + CURRENT OFFSET 
+0249 0e			        DEFB    REL-SETM 
+024a ..			        DEFM    'S'             ;MOVE MEMORY 
+024b e5			        DEFB    MOVER-SETM 
+024c ..			        DEFM    'W'             ;SWITCH REGISTER SET 
+024d 20			        DEFB    SWITCH-SETM 
+024e ..			        DEFM    'Z'             ;SINGLE STEP 
+024f 31			        DEFB    STEP-SETM 
+0250			TBL2LN: EQU     $-TBL2 
+0250			 
+0250			;SETM - PROMPT AND GET NEW VALUE FOR MPTR 
+0250			 
+0250 cd 05 06		SETM:   CALL    PGTHEX 
+0253 18 a5		        JR      SVM 
+0255			 
+0255			;IND - SET MPTR TO CURRENT WORD ADDRESS 
+0255			 
+0255 2a 07 40		IND:    LD      HL,(MPTR) 
+0258 5e			        LD      E,(HL) 
+0259 23			        INC     HL 
+025a 56			        LD      D,(HL) 
+025b eb			        EX      DE,HL 
+025c 18 9c		        JR      SVM 
+025e			 
+025e			;REL - SET MPTR TO CURRENT RELATIVE ADDRESS 
+025e			 
+025e 2a 07 40		REL:    LD      HL,(MPTR) 
+0261			        CALR    RTOA            ;HL <- HL + (HL) + 1 
+0261 ef			        RST 28H 
+0262 02			        DEFB RTOA-$-1 
+0263			        endm 
+# End of macro CALR
+0263 18 95		        JR      SVM 
+0265			 
+0265			;RTOA - LOAD HL WITH HL + (HL) + 1 (REL TO ABS) 
+0265			;DESTROYS AF AND DE 
+0265			 
+0265 5e			RTOA:   LD      E,(HL)          ;E <- OFFSET 
+0266 16 00		        LD      D,0             ;EXTEND SIGN TO D 
+0268 cb 7b		        BIT     7,E 
+026a 28 01		        JR      Z,RA1 
+026c 15			        DEC     D 
+026d 19			RA1:    ADD     HL,DE 
+026e 23			        INC     HL 
+026f c9			        RET 
+0270			 
+0270			;SWITCH - SWITCH REGISTER SET BEING DISPLAYED 
+0270			 
+0270 3a 0a 40		SWITCH: LD      A,(RSET)        ;TOGGLE THE SWITCH 
+0273 2f			        CPL 
+0274 32 0a 40		        LD      (RSET),A 
+0277 f1			        POP     AF              ;POP RET ADDR 
+0278 f1			        POP     AF              ;RESTORE CURRENT SET 
+0279 c1			        POP     BC 
+027a d1			        POP     DE 
+027b e1			        POP     HL 
+027c 08			        EX      AF,AF'          ;EXCHANGE REGISTERS 
+027d d9			        EXX 
+027e c3 e3 00		        JP      FPM2            ;RE-ENTER TO DISPLAY OTHER SET 
+0281			 
+0281			;STEP - ENABLE SINGLE INSTRUCTION MODE 
+0281			;       MODE IS CLEARED ON NMI 
+0281			 
+0281 21 03 40		STEP:   LD      HL,MASK         ;SET SS BIT IN MASK 
+0284 cb 8e		        RES     SINGLE,(HL) 
+0286 23			        INC     HL              ;POINT TO SS FLG 
+0287 36 53		        LD      (HL),'S'        ;SET MONITOR SS FLAG 
+0289			 
+0289			;CONTIN - CONTINUE EXECUTION AT SAVED PC 
+0289			;         CALL UPDATE TO ENABLE 
+0289			;         SINGLE STEP LOGIC IF SET IN 'MASK' 
+0289			 
+0289 f1			CONTIN: POP     AF              ;POP FP RET ADDR 
+028a f1			        POP     AF              ;POP CURRENT REGS 
+028b c1			        POP     BC 
+028c d1			        POP     DE 
+028d e1			        POP     HL 
+028e dd e1		        POP     IX 
+0290			        EMT     UPDATE          ;SS CN IF SET 
+0290 f7			        RST 30H 
+0291 12			        DEFB UPDATE 
+0292			        endm 
+# End of macro EMT
+0292 fd e1		        POP     IY 
+0294 33			        INC     SP 
+0295 33			        INC     SP 
+0296 c9			        RET 
+0297			 
+0297			;PUT - FILLS AND TESTS MEMORY BETWEEN LIMITS 
+0297			 
+0297 cd e7 05		PUT:    CALL    FSTLST          ;DE <- FIRST, HL <- DIFF 
+029a 23			        INC     HL              ;LENGTH INCLUSIVE 
+029b e5			        PUSH    HL              ;SAVE COUNT 
+029c 21 34 00		        LD      HL,MSGP 
+029f cd fd 05		        CALL    MGTHEX          ;GET FILL BYTE 
+02a2 7d			        LD      A,L             ;A = FILLER 
+02a3 eb			        EX      DE,HL           ;HL = START 
+02a4 c1			        POP     BC              ;BC = NO. OF ADDRS TO FILL 
+02a5			 
+02a5 77			PT1:    LD      (HL),A          ;FILL MEMORY 
+02a6 ed a1		        CPI                     ;THEN CHECK IT 
+02a8 28 0e		        JR      Z,PT2           ;IF (HL) MATCHES A 
+02aa f5			        PUSH    AF              ;ELSE ERR, SAVE PARITY FLAG 
+02ab e5			        PUSH    HL              ;SAVE NEXT ADDR TO TEST 
+02ac 2b			        DEC     HL              ;(HL) IS NOW INCORRECT BYTE 
+02ad 22 07 40		        LD      (MPTR),HL       ;SO IT'S SEEN ON FP 
+02b0 cd ce 05		        CALL    ERROUT          ;ERROR MSG 
+02b3 e1			        POP     HL              ;RESTORE NEXT ADDR 
+02b4 f1			        POP     AF              ;RESTORE PARITY FLAG 
+02b5 cd de 00		        CALL    FPM1            ;FP ON, CONTINUE TEST AFTER 'K' 
+02b8 e0			PT2:    RET     PO              ;UNTIL BC = 0 
+02b9 18 ea		        JR      PT1 
+02bb			;HEXCAL - HEXADECIMAL CALCULATOR 
+02bb			 
+02bb cd 02 06		HEXCAL: CALL    CGTHEX          ;GET X 
+02be e5			        PUSH    HL              ;(SP) <- X 
+02bf eb			        EX      DE,HL           ;DE <- X 
+02c0 cd 02 06		        CALL    CGTHEX          ;GET Y 
+02c3 e5			        PUSH    HL              ;(SP) <- Y 
+02c4 19			        ADD     HL,DE           ;HL <- X+Y 
+02c5 eb			        EX      DE,HL           ;DE <- X+Y 
+02c6 21 c6 0d		        LD      HL,0DC6H        ;HL <- VT ADDR 
+02c9 cd 8d 06		        CALL    DEOUTW          ;DISPLAY SUM 
+02cc d1			        POP     DE              ;GET Y 
+02cd e3			        EX      (SP),HL         ;GET X, SAVE VT PTR 
+02ce b7			        OR      A               ;CLEAR CY 
+02cf ed 52		        SBC     HL,DE           ;HL <- X-Y 
+02d1 eb			        EX      DE,HL           ;DE <- X-Y 
+02d2 e1			        POP     HL              ;RESTORE VT PTR 
+02d3 23			        INC     HL 
+02d4 c3 8d 06		        JP      DEOUTW          ;DISP DIF, RET TO FP 
+02d7			 
+02d7			;GETPAT - ENTRY TO GET PATN FROM KBD, THEN SEARCH 
+02d7			 
+02d7 11 4c 40		GETPAT: LD      DE,PATN         ;DE <- PATN ADDR 
+02da af			        XOR     A 
+02db 32 4b 40		GP1:    LD      (PATL),A        ;UPDATE PATN LENGTH 
+02de cd 02 06		        CALL    CGTHEX          ;POSSIBLY GET A BYTE 
+02e1 79			        LD      A,C             ;TEST FOR ONE 
+02e2 b7			        OR      A 
+02e3 28 09		        JR      Z,GPNXT         ;JUMP IF NO BYTE 
+02e5 7d			        LD      A,L             ;ELSE STORE IT 
+02e6 12			        LD      (DE),A 
+02e7 13			        INC     DE 
+02e8 3a 4b 40		        LD      A,(PATL)        ;INC LENGTH 
+02eb 3c			        INC     A 
+02ec 18 ed		        JR      GP1 
+02ee			 
+02ee			;GPNXT - GET NEXT OCCURRENCE OF PATN 
+02ee			 
+02ee			GPNXT: 
+02ee 2a 07 40		GP2:    LD      HL,(MPTR)       ;START FROM (MPTR)+1 
+02f1 23			        INC     HL 
+02f2 11 4c 40		        LD      DE,PATN         ;DE <- START OF PATTERN 
+02f5 1a			        LD      A,(DE)          ;A <- FIRST BYTE TO FIND 
+02f6 01 00 00		        LD      BC,0            ;SET BC FOR 65K 
+02f9 ed b1		        CPIR                    ;FIND FIRST MATCH 
+02fb 2b			        DEC     HL              ;POINT TO START AND 
+02fc 22 07 40		        LD      (MPTR),HL       ;SAVE MEMORY PTR 
+02ff 23			        INC     HL              ;THEN POINT TO NEXT AGAIN 
+0300 3a 4b 40		        LD      A,(PATL)        ;A <- PATTERN LENGTH 
+0303 b7			        OR      A               ;/IGNORE ZERO LENGTH 
+0304 c8			        RET     Z               ;/ 
+0305 3d			        DEC     A               ;HAVE FOUND FIRST 
+0306 4f			        LD      C,A             ;BC <- LENGTH 
+0307 af			GP3:    XOR     A 
+0308 47			        LD      B,A 
+0309 b1			        OR      C               ;WHILE (BC > 0) 
+030a c8			        RET     Z 
+030b 13			        INC     DE              ;CHECK REST OF PATN 
+030c 1a			        LD      A,(DE)          ;A <- NEXT IN PATN 
+030d ed a1		        CPI 
+030f 20 dd		        JR      NZ,GP2          ;IF NO MATCH, BREAK TO CONTINUE SEARCH 
+0311 18 f4		        JR      GP3 
+0313			 
+0313			 
+0313			;JUMP - PROMPT FOR ADDRESS, THEN 
+0313			;RESTORE SCROLLER AND GO TO ADDRESS 
+0313			 
+0313 31 00 41		FPJMP:  LD      SP,STACK        ;CLEAN UP STACK 
+0316			 
+0316 cd 05 06		JUMP:   CALL    PGTHEX          ;GET ADDR 
+0319 e5			        PUSH    HL              ;SAVE FOR RET 
+031a			 
+031a			;SCROLL - RESTORES FULL SCREEN SCROLL 
+031a			 
+031a 01 03 00		.SCROL: LD      BC,3            ;RESTORE SCROLLER 
+031d			 
+031d			;INIT - MOVES BC WORDS FROM INITBK TO RAM SCRATCH AREA 
+031d			 
+031d 21 e6 07		INIT:   LD      HL,INITBK 
+0320 11 00 40		IT1:    LD      DE,RAM 
+0323 ed b0		        LDIR 
+0325 c9			        RET 
+0326			 
+0326			;GRAFIX - CLEARS GRAPHICS ('FRONT PANEL') AREA 
+0326			;AND SETS SCROLLER TO BOTTOM FOUR LINES 
+0326			 
+0326 3e 14		.GRAFX: LD      A,20            ;NO. OF LINES 
+0328 21 00 08		        LD      HL,800H         ;TOP OF SCREEN 
+032b			        EMT     CLEAR 
+032b f7			        RST 30H 
+032c 0f			        DEFB CLEAR 
+032d			        endm 
+# End of macro EMT
+032d			 
+032d			;GRAFNC - SETS SCROLLER WITHOUT CLEARING 
+032d			 
+032d 01 03 00		GRAFNC: LD      BC,3 
+0330 21 05 08		        LD      HL,GRAFBK 
+0333 18 eb		        JR      IT1 
+0335			 
+0335			;MOVER - SEE MOVE 
+0335			 
+0335 18 73		MOVER:  JR      MOVE 
+0337			 
+0337			 
+0337			;       "THE WHITE RABBIT PUT ON HIS SPECTACLES. 'WHERE 
+0337			;        SHALL I BEGIN, PLEASE YOUR MAJESTY?' HE ASKED. 
+0337			;        'BEGIN AT THE BEGINNING,' THE KING SAID GRAVELY, 
+0337			;        'AND GO ON TILL YOU COME TO THE END: THEN STOP." 
+0337			;               LEWIS CARROLL  ALICE'S ADVENTURES IN WONDERLAND 
+0337			 
+0337			;BEGIN - SET STACK AND SYSTEM POINTERS, DROP 
+0337			;THROUGH TO MAIN MONITOR COMMANDS 
+0337			 
+0337 31 00 41		BEGIN:  LD      SP,STACK 
+033a f3			        DI 
+033b 01 1f 00		        LD      BC,INITLN       ;COPY INITBK TO RAM 
+033e			        CALR    INIT 
+033e ef			        RST 28H 
+033f dd			        DEFB INIT-$-1 
+0340			        endm 
+# End of macro CALR
+0340 3e ff		        LD      A,0FFH          ;SET REMAINING VECTORS TO 0FFH 
+0342 06 21		        LD      B,FFLEN 
+0344 21 1f 40		        LD      HL,OUT1 
+0347 77			BG1:    LD      (HL),A 
+0348 23			        INC     HL 
+0349 10 fc		        DJNZ    BG1 
+034b 36 c9		        LD      (HL),0C9H       ;SET MONX TO 'RET' 
+034d			 
+034d 3e 93		        LD      A,MKINIT+1      ;/CLEAR KBD (RESETS PORT0) 
+034f 32 fc 0f		        LD      (PORT0),A 
+0352			        EMT     UPDATE 
+0352 f7			        RST 30H 
+0353 12			        DEFB UPDATE 
+0354			        endm 
+# End of macro EMT
+0354 3e 0c		        LD      A,FORM          ;CLEAR SCREEN 
+0356			        EMT     OUTC 
+0356 f7			        RST 30H 
+0357 16			        DEFB OUTC 
+0358			        endm 
+# End of macro EMT
+0358			 
+0358 22 43 40		BG2:    LD      (HIMEM),HL      ;FIND TOP OF RAM 
+035b 23			        INC     HL 
+035c 7e			        LD      A,(HL)          ;SAVE CONTENT 
+035d 2f			        CPL 
+035e 77			        LD      (HL),A          ;TEST IF COMPL READS BACK 
+035f be			        CP      (HL) 
+0360 2f			        CPL 
+0361 77			        LD      (HL),A          ;RESTORE ORIGINAL CONTENT 
+0362 28 f4		        JR      Z,BG2           ;CONTINUE UNTIL END OF RAM 
+0364			 
+0364 3a 00 10		        LD      A,(NXTROM)      ;TEST FOR ADDITIONAL ROM 
+0367 b7			        OR      A               ;IF IT CONTAINS ZERO 
+0368 cc 00 10		        CALL    Z,NXTROM        ; CALL IT 
+036b			 
+036b 21 db 07		        LD      HL,MSGV         ;OUTPUT VERSION 
+036e cd d1 05		        CALL    MOUT 
+0371			 
+0371			;CONTC - DO PARTIAL RESET, THEN DROP THROUGH TO MONITOR 
+0371			 
+0371 31 00 41		CONTC:  LD      SP,STACK 
+0374 01 04 00		        LD      BC,CCLEN        ;RESET SCROLLER TO FULL SCREEN 
+0377			        CALR    INIT            ;AND INITIALISE PORT0 MASK 
+0377 ef			        RST 28H 
+0378 a4			        DEFB INIT-$-1 
+0379			        endm 
+# End of macro CALR
+0379			 
+0379			;ZMON - MONITOR COMMAND LOOP 
+0379			 
+0379 3e 5d		ZMON:   LD      A,RARR          ;ISSUE CR, MONITOR PROMPT 
+037b cd 3f 05		        CALL    AOUT 
+037e cd 40 40		        CALL    MONX            ;CHECK FOR EXTENDED MONITOR 
+0381 cd cd 00		        CALL    GETC 
+0384			        EMT     OUTC 
+0384 f7			        RST 30H 
+0385 16			        DEFB OUTC 
+0386			        endm 
+# End of macro EMT
+0386 fe 4c		        CP      'L'             ;LOAD MEMORY FROM CASSETTE 
+0388 28 44		        JR      Z,LOAD 
+038a fe 44		        CP      'D'             ;DUMP MEMORY TO CASSETTE 
+038c ca 67 04		        JP      Z,SAVE          ;/POSSIBLY JR 
+038f fe 4a		        CP      'J'             ;GO TO ADDRESS 
+0391 28 83		        JR      Z,JUMP 
+0393 fe 43		        CP      'C'             ;REENTER USER PROG 
+0395 28 0c		        JR      Z,RNTR 
+0397 fe 42		        CP      'B'             ;MOVE MEMORY 
+0399 cc 00 20		        CALL    Z,BASIC         ; MUST BE LAST IN LIST 
+039c fe 53		        CP      'S'             ;MOVE MEMORY 
+039e cc aa 03		        CALL    Z,MOVE          ; MUST BE LAST IN LIST 
+03a1 18 d6		        JR      ZMON            ; BECAUSE MOVE DOES A 'RET' 
+03a3			 
+03a3			;RNTR - REENTER USER PROGRAM AT (ADDR) + 3 
+03a3			 
+03a3 2a 0b 40		RNTR:   LD      HL,(ADDR) 
+03a6 23			        INC     HL 
+03a7 23			        INC     HL 
+03a8 23			        INC     HL 
+03a9 e9			        JP      (HL) 
+03aa			 
+03aa			;MOVE - MOVE BLOCK OF MEMORY UP OR DOWN 
+03aa			;       PROMPTS FOR START (OLD S) AND FINISH (OLD F), 
+03aa			;        THEN NEW START (NEW S) 
+03aa			 
+03aa cd e7 05		MOVE:   CALL    FSTLST          ;DE <- OLD S, HL <- (OLD F-OLD S) 
+03ad e5			        PUSH    HL              ;(SP) <- LEN-1 
+03ae 21 06 00		        LD      HL,MSGM         ;GET NEW S 
+03b1 cd fd 05		        CALL    MGTHEX          ;HL <- NEW S 
+03b4 eb			        EX      DE,HL           ;HL <- OS, DE <- NS 
+03b5 c1			        POP     BC              ;BC <- LEN-1 
+03b6 e5			        PUSH    HL              ;(SP) <- OLD S 
+03b7 b7			        OR      A               ;CLEAR CY 
+03b8 ed 52		        SBC     HL,DE           ;CY->UP, NO CY->DOWN 
+03ba e1			        POP     HL              ;HL <- OLD S 
+03bb			        EMT     OPNWT           ;### ALLOW VT MOVES 
+03bb f7			        RST 30H 
+03bc 0b			        DEFB OPNWT 
+03bd			        endm 
+# End of macro EMT
+03bd 30 09		        JR      NC,MV1          ;IF MOVE DOWN 
+03bf 09			        ADD     HL,BC           ;HL <- OLD F 
+03c0 eb			        EX      DE,HL 
+03c1 09			        ADD     HL,BC 
+03c2 eb			        EX      DE,HL           ;DE <- NEW F 
+03c3 03			        INC     BC              ;MAKE LENGTH INCLUSIVE 
+03c4 ed b8		        LDDR                    ;MOVE UP FROM TOP 
+03c6 18 03		        JR      MV2 
+03c8 03			MV1:    INC     BC              ;MAKE LENGTH INCLUSIVE 
+03c9 ed b0		        LDIR                    ;MOVE DOWN FROM BOTTOM 
+03cb			MV2:    EMT     CLOSE           ;### 
+03cb f7			        RST 30H 
+03cc 0c			        DEFB CLOSE 
+03cd			        endm 
+# End of macro EMT
+03cd c9			        RET 
+03ce			 
+03ce			 
+03ce			;LOAD - LOADS TAPE IN RML ABSOLUTE FORMAT 
+03ce			 
+03ce cd 59 06		LOAD:   CALL    GETNAM          ;GET NAME TO FIND 
+03d1 cd 4a 05		        CALL    CROUT 
+03d4			                                ;START TAPE 
+03d4 21 00 00		FIND:   LD      HL,0            ;/SET RECORD ADDR TO ZERO 
+03d7 cd 51 04		        CALL    RECNO           ;/ 
+03da cd 2e 04		        CALL    GETHDR 
+03dd 3c			        INC     A               ;SET Z IF NAME REC (TYPE -1) 
+03de 20 f4		        JR      NZ,FIND         ;ELSE CONTINUE SEARCH 
+03e0			 
+03e0 21 4c 40		        LD      HL,PATN         ;HL <- BUFFER ADDR FOR NAME 
+03e3 e5			        PUSH    HL              ;SAVE THE ADDR 
+03e4 cd 40 04		        CALL    GET             ;READ THE NAME REC 
+03e7 20 25		        JR      NZ,LDERR        ;CKSUM ERROR 
+03e9 36 ff		        LD      (HL),-1         ;PUT EOS TO BUF 
+03eb e1			        POP     HL              ;HL <- START OF NAME 
+03ec cd d4 05		        CALL    .MSG            ;DISPLAY IT (HL UNCHANGED) 
+03ef cd 4a 05		        CALL    CROUT 
+03f2 11 45 40		        LD      DE,NAME         ;DE <- START OF WANTED NAME 
+03f5 06 06		        LD      B,6             ;COMPARE 6 CHARS 
+03f7 1a			COMP:   LD      A,(DE)          ;GET CHAR FROM TARGET 
+03f8 be			        CP      (HL)            ;COMPARE CHAR FROM THIS NAME 
+03f9 20 d9		        JR      NZ,FIND         ;JUMP IF NO MATCH 
+03fb 13			        INC     DE              ;INC POINTERS 
+03fc 23			        INC     HL 
+03fd 10 f8		        DJNZ    COMP            ;REPEAT IF MORE 
+03ff			 
+03ff cd 2e 04		GETREC: CALL    GETHDR 
+0402 e5			        PUSH    HL              ;SAVE ADDR 
+0403 b7			        OR      A               ;TEST TYPE 
+0404 20 17		        JR      NZ,GR1          ;IF NOT TYPE 0 
+0406 cd 40 04		        CALL    GET             ;LOAD DATA 
+0409 e1			        POP     HL              ;/RESTORE ADDR 
+040a			        CALR    RECNO           ;/AND DISPLAY IT 
+040a ef			        RST 28H 
+040b 45			        DEFB RECNO-$-1 
+040c			        endm 
+# End of macro CALR
+040c 28 f1		        JR      Z,GETREC        ;Z MEANS CKSUM OK 
+040e			 
+040e cd ce 05		LDERR:  CALL    ERROUT          ;OUTPUT ERROR MSG 
+0411 cd cd 00		LDER1:  CALL    GETC            ;WAIT FOR KBD 
+0414 fe 4c		        CP      'L' 
+0416 20 f9		        JR      NZ,LDER1        ;WAIT FOR 'L' 
+0418 cd 4a 05		        CALL    CROUT 
+041b 18 e2		        JR      GETREC          ;CONTINUE LOADING 
+041d			 
+041d 3d			GR1:    DEC     A               ;TEST TYPE 
+041e 20 0b		        JR      NZ,GR2          ;IF NOT TYPE 1 
+0420			        CALR    TI              ;EOF, GET CKSUM 
+0420 ef			        RST 28H 
+0421 28			        DEFB TI-$-1 
+0422			        endm 
+# End of macro CALR
+0422 e1			        POP     HL              ;/RESTORE ADDR 
+0423			        CALR    RECNO           ;/AND DISPLAY IT 
+0423 ef			        RST 28H 
+0424 2c			        DEFB RECNO-$-1 
+0425			        endm 
+# End of macro CALR
+0425 20 e7		        JR      NZ,LDERR 
+0427			 
+0427 22 0b 40		        LD      (ADDR),HL       ;SAVE START ADDR 
+042a e9			        JP      (HL)            ;GO TO ADDRESS 
+042b			 
+042b e1			GR2:    POP     HL              ;/SKIP REC IF NOT TYPES 0 OR 1 
+042c 18 d1		        JR      GETREC          ;CONTINUE LOADING 
+042e			 
+042e			;GETHDR - GET RECORD HEADER 
+042e			; RETURN WITH HL=ADDRESS, B=LENGTH AND A=TYPE 
+042e			 
+042e 3e 4d		GETHDR: LD      A,SOH           ;WAIT FOR START OF RECORD 
+0430			        EMT     GETSYN 
+0430 f7			        RST 30H 
+0431 11			        DEFB GETSYN 
+0432			        endm 
+# End of macro EMT
+0432 af			        XOR     A               ;CLEAR CKSUM 
+0433 4f			        LD      C,A 
+0434			        CALR    TI              ;GET LENGTH 
+0434 ef			        RST 28H 
+0435 14			        DEFB TI-$-1 
+0436			        endm 
+# End of macro CALR
+0436 47			        LD      B,A 
+0437			        CALR    TI              ;GET ADDR H 
+0437 ef			        RST 28H 
+0438 11			        DEFB TI-$-1 
+0439			        endm 
+# End of macro CALR
+0439 67			        LD      H,A 
+043a			        CALR    TI              ;GET ADDR L 
+043a ef			        RST 28H 
+043b 0e			        DEFB TI-$-1 
+043c			        endm 
+# End of macro CALR
+043c 6f			        LD      L,A 
+043d			        CALR    TI              ;GET RECORD TYPE 
+043d ef			        RST 28H 
+043e 0b			        DEFB TI-$-1 
+043f			        endm 
+# End of macro CALR
+043f c9			        RET 
+0440			 
+0440			;GET - READ B BYTES FROM TAPE TO (HL), RETURNING 
+0440			;       WITH Z SET FROM CKSUM 
+0440			 
+0440			GET:    CALR    TI 
+0440 ef			        RST 28H 
+0441 08			        DEFB TI-$-1 
+0442			        endm 
+# End of macro CALR
+0442 77			        LD      (HL),A 
+0443 be			        CP      (HL) 
+0444 28 01		        JR      Z,GT1           ;IF BYTE LOADED 
+0446 ff			        RST     38H             ;ELSE BREAK 
+0447 23			GT1:    INC     HL 
+0448 10 f6		        DJNZ    GET             ;DROP THRO' TO TI FOR CKSUM 
+044a			 
+044a			;TI - READ BYTE FROM TAPE INTO A, FORM CKSUM 
+044a			 
+044a			TI:     EMT     GETBYT 
+044a f7			        RST 30H 
+044b 04			        DEFB GETBYT 
+044c			        endm 
+# End of macro EMT
+044c 57			        LD      D,A             ;D <- BYTE 
+044d 81			        ADD     A,C             ;ADD CKSUM TO BYTE 
+044e 4f			        LD      C,A             ;RESTORE CKSUM 
+044f 7a			        LD      A,D             ;RESTORE BYTE 
+0450 c9			        RET                     ;WITH Z FLAG FROM CKSUM 
+0451			 
+0451			;RECNO - INDICATE TAPE ACTIVITY, DISPLAY RECORD ADDRESS 
+0451			 
+0451 e5			RECNO:  PUSH    HL              ;STANDARD SAVE SEQUENCE 
+0452 d5			        PUSH    DE 
+0453 c5			        PUSH    BC 
+0454 f5			        PUSH    AF 
+0455 eb			        EX      DE,HL           ;/DE <- ADDR (HL ON ENTRY) 
+0456 21 c0 0d		        LD      HL,0DC0H        ;HL <- CURSOR ADDR 
+0459			        EMT     OPNWT           ;### 
+0459 f7			        RST 30H 
+045a 0b			        DEFB OPNWT 
+045b			        endm 
+# End of macro EMT
+045b 7e			        LD      A,(HL)          ;BLINK CURSOR 
+045c ee 7f		        XOR     CURSOR 
+045e 77			        LD      (HL),A 
+045f 23			        INC     HL              ;/LEAVE A SPACE 
+0460 23			        INC     HL              ;/ 
+0461 cd 8f 06		        CALL    DEOUTC          ;/### AND CLOSE 
+0464 c3 c9 05		        JP      RET1            ;STANDARD EXIT 
+0467			 
+0467			;SAVE - DUMPS MEMORY TO TAPE WITH OPTIONAL START ADDR 
+0467			 
+0467 cd 59 06		SAVE:   CALL    GETNAM          ;GET A NAME 
+046a cd e7 05		        CALL    FSTLST          ;DE <- FIRST ADDR, BC <- LAST 
+046d c5			        PUSH    BC              ;(SP) <- LAST 
+046e 21 23 00		        LD      HL,MSGS         ;GET AUTOSTART ADDR 
+0471 cd fd 05		        CALL    MGTHEX          ;HL <- START 
+0474 e3			        EX      (SP),HL         ;(SP) <- START ADDR 
+0475 e5			        PUSH    HL              ;SAVE LAST ADDR 
+0476 d5			        PUSH    DE              ;SAVE FIRST ADDR 
+0477 cd 4a 05		        CALL    CROUT 
+047a 21 00 00		        LD      HL,0            ;/CLEAR REC ADDR 
+047d			        CALR    RECNO           ;/INDICATE ACTIVITY 
+047d ef			        RST 28H 
+047e d2			        DEFB RECNO-$-1 
+047f			        endm 
+# End of macro CALR
+047f			                                ;START TAPE 
+047f cd 9b 07		        CALL    SEC5            ;5 SEC DELAY 
+0482			 
+0482 21 45 40		        LD      HL,NAME         ;OUTPUT NAME 
+0485 16 ff		        LD      D,-1            ;REC TYPE -1 (NAME) 
+0487 06 06		        LD      B,6 
+0489 cd b9 04		        CALL    PUTRNA          ;PUTREC, NO ADDR 
+048c d1			        POP     DE              ;RESTORE DUMP LIMITS 
+048d e1			        POP     HL 
+048e			 
+048e e5			SV1:    PUSH    HL              ;(SP) <- LAST ADDR 
+048f 06 7a		        LD      B,RECLEN-6      ;B <- RECORD SIZE 
+0491 af			        XOR     A               ;CLEAR CY 
+0492 ed 52		        SBC     HL,DE           ;GET LENGTH TO DUMP 
+0494 38 13		        JR      C,SV3           ;DUMP COMPLETE (BECAUSE INCL) 
+0496 bc			        CP      H               ;IF LENGTH > 255 
+0497 20 06		        JR      NZ,SV2          ; CONTINUE 
+0499 7d			        LD      A,L             ;IF LENGTH >= 1 REC 
+049a b8			        CP      B 
+049b 30 02		        JR      NC,SV2          ; CONTINUE 
+049d 47			        LD      B,A             ;ELSE DUMP REMAINDER 
+049e 04			        INC     B               ; INCLUSIVELY 
+049f eb			SV2:    EX      DE,HL           ;NOW HL <- CURRENT ADDR 
+04a0 16 00		        LD      D,0             ;REC TYPE 0 (DATA) 
+04a2 cd b7 04		        CALL    PUTREC          ;WHICH UPDATES HL 
+04a5 d1			        POP     DE              ;DE <- LAST ADDR TO DUMP 
+04a6 eb			        EX      DE,HL           ;HL <- LAST, DE <- CURRENT 
+04a7 18 e5		        JR      SV1 
+04a9			 
+04a9 e1			SV3:    POP     HL              ;END REC, BALANCE STACK 
+04aa e1			        POP     HL              ;HL <- START ADDR 
+04ab 06 00		        LD      B,0 
+04ad 16 01		        LD      D,1             ;REC TYPE 1 (EOF) 
+04af cd b7 04		        CALL    PUTREC 
+04b2 cd 9b 07		        CALL    SEC5            ;5 SEC DELAY 
+04b5			                                ;STOP TAPE 
+04b5			        EMT     0               ;BACK TO MONITOR 
+04b5 f7			        RST 30H 
+04b6 00			        DEFB 0 
+04b7			        endm 
+# End of macro EMT
+04b7			 
+04b7			;PUTREC - WRITE RECORD TO TAPE WITH CKSUM 
+04b7			; OUTPUT B BYTES FROM (HL), D=TYPE, C=CKSUM 
+04b7			 
+04b7			PUTREC: CALR    RECNO           ;/DISPLAY ADDR (FROM HL) 
+04b7 ef			        RST 28H 
+04b8 98			        DEFB RECNO-$-1 
+04b9			        endm 
+# End of macro CALR
+04b9 3e 4d		PUTRNA: LD      A,SOH           ;PUT SOH (NOT IN CKSUM) 
+04bb			        CALR    TO 
+04bb ef			        RST 28H 
+04bc 23			        DEFB TO-$-1 
+04bd			        endm 
+# End of macro CALR
+04bd af			        XOR     A               ;ZERO CKSUM 
+04be 4f			        LD      C,A 
+04bf 78			        LD      A,B             ;PUT LENGTH 
+04c0			        CALR    TO 
+04c0 ef			        RST 28H 
+04c1 1e			        DEFB TO-$-1 
+04c2			        endm 
+# End of macro CALR
+04c2 7c			        LD      A,H             ;PUT ADDR H 
+04c3			        CALR    TO 
+04c3 ef			        RST 28H 
+04c4 1b			        DEFB TO-$-1 
+04c5			        endm 
+# End of macro CALR
+04c5 7d			        LD      A,L             ;PUT ADDR L 
+04c6			        CALR    TO 
+04c6 ef			        RST 28H 
+04c7 18			        DEFB TO-$-1 
+04c8			        endm 
+# End of macro CALR
+04c8 7a			        LD      A,D             ;PUT TYPE 
+04c9			        CALR    TO 
+04c9 ef			        RST 28H 
+04ca 15			        DEFB TO-$-1 
+04cb			        endm 
+# End of macro CALR
+04cb 78			        LD      A,B             ;CHECK LENGTH 
+04cc b7			        OR      A 
+04cd 28 06		        JR      Z,PR2           ;JUMP IF NO DATA 
+04cf 7e			PR1:    LD      A,(HL) 
+04d0 23			        INC     HL 
+04d1			        CALR    TO 
+04d1 ef			        RST 28H 
+04d2 0d			        DEFB TO-$-1 
+04d3			        endm 
+# End of macro CALR
+04d3 10 fa		        DJNZ    PR1 
+04d5 79			PR2:    LD      A,C             ;GET CKSUM 
+04d6 ed 44		        NEG 
+04d8			        CALR    TO              ;PUT CKSUM 
+04d8 ef			        RST 28H 
+04d9 06			        DEFB TO-$-1 
+04da			        endm 
+# End of macro CALR
+04da 06 02		        LD      B,GAP 
+04dc cd 9d 07		        CALL    MS100           ;INTER RECORD GAP 
+04df c9			        RET 
+04e0			 
+04e0			;TO - PUT BYTE TO TAPE, FORM CKSUM IN C 
+04e0			 
+04e0			TO:     EMT     PUTBYT          ;A <- BYTE 
+04e0 f7			        RST 30H 
+04e1 03			        DEFB PUTBYT 
+04e2			        endm 
+# End of macro EMT
+04e2 81			        ADD     A,C             ;ADD CKSUM TO BYTE 
+04e3 4f			        LD      C,A             ;SAVE CKSUM 
+04e4 c9			        RET 
+04e5			 
+04e5			 
+04e5			;.KBDIN - READ KEYBOARD (CALLED VIA EMT) 
+04e5			;ON EXIT Z SET IF NO CHAR, ELSE CLEAR 
+04e5			;WATCH FOR CTRL C (RETURN TO MONITOR) 
+04e5			 
+04e5 e5			.KBDIN: PUSH    HL 
+04e6 21 03 40		        LD      HL,MASK 
+04e9 cb c6		        SET     CLRKBD,(HL)     ;SET UP TO CLEAR KBD 
+04eb 3a fc 0f		        LD      A,(KBD)         ;A <- POSSIBLE CHAR 
+04ee e6 7f		        AND     7FH             ;CLEAR MS BIT 
+04f0 28 02		        JR      Z,KBD1          ;IF NO CHAR AVAILABLE 
+04f2			        EMT     UPDATE          ;CLEAR KBD 
+04f2 f7			        RST 30H 
+04f3 12			        DEFB UPDATE 
+04f4			        endm 
+# End of macro EMT
+04f4 cb 86		KBD1:   RES     CLRKBD,(HL) 
+04f6			        EMT     UPDATE 
+04f6 f7			        RST 30H 
+04f7 12			        DEFB UPDATE 
+04f8			        endm 
+# End of macro EMT
+04f8 e1			        POP     HL 
+04f9 c8			        RET     Z               ;NO CHAR AVAILABLE 
+04fa fe 03		        CP      CTRLC           ;IF NOT CTRL C 
+04fc c0			        RET     NZ              ;RETURN THE CHAR 
+04fd			        EMT     0               ;ELSE RESTART MONITOR 
+04fd f7			        RST 30H 
+04fe 00			        DEFB 0 
+04ff			        endm 
+# End of macro EMT
+04ff			 
+04ff			;CLSOPN - CLOSE THEN OPEN (USED WHEN ROUTINE IS 
+04ff			;LONGER THAN FRAME BLANKING PERIOD) 
+04ff			 
+04ff			CLSOPN: EMT     CLOSE           ;DROP THRO' TO OPNWT 
+04ff f7			        RST 30H 
+0500 0c			        DEFB CLOSE 
+0501			        endm 
+# End of macro EMT
+0501			 
+0501			 
+0501			;.OPNWT - OPEN VT MEMORY IN FRAME BLANKING PERIOD 
+0501			 
+0501 e5			.OPNWT: PUSH    HL 
+0502 f5			        PUSH    AF 
+0503 21 fe 0f		        LD      HL,PORT1 
+0506 cb 76		OPNW1:  BIT     FRAME,(HL)      ;IF IN IT, WAIT 
+0508 20 fc		        JR      NZ,OPNW1 
+050a cb 76		OPNW2:  BIT     FRAME,(HL)      ;WAIT FOR NEXT 
+050c 28 fc		        JR      Z,OPNW2 
+050e 21 03 40		        LD      HL,MASK         ;OPEN MEMORY 
+0511 cb d6		        SET     VTOPN,(HL) 
+0513			        EMT     UPDATE 
+0513 f7			        RST 30H 
+0514 12			        DEFB UPDATE 
+0515			        endm 
+# End of macro EMT
+0515 f1			        POP     AF 
+0516 e1			        POP     HL 
+0517 c9			        RET 
+0518			 
+0518			;.CLEAR - EXTERNAL CALL TO CLR WHICH DROPS 
+0518			;THROUGH TO CLOSE 
+0518			 
+0518			.CLEAR: EMT     OPNWT 
+0518 f7			        RST 30H 
+0519 0b			        DEFB OPNWT 
+051a			        endm 
+# End of macro EMT
+051a cd 30 05		        CALL    CLR 
+051d			 
+051d			;.CLOSE - CLOSE VT MEMORY 
+051d			 
+051d e5			.CLOSE: PUSH    HL 
+051e 21 03 40		        LD      HL,MASK 
+0521 cb 96		        RES     VTOPN,(HL) 
+0523			        EMT     UPDATE 
+0523 f7			        RST 30H 
+0524 12			        DEFB UPDATE 
+0525			        endm 
+# End of macro EMT
+0525 e1			        POP     HL 
+0526 c9			        RET 
+0527			 
+0527			;UPDATE - OUTPUT MASK TO PORT 0 
+0527			 
+0527 f5			.UPDAT: PUSH    AF 
+0528 3a 03 40		UPD1:   LD      A,(MASK) 
+052b 32 fc 0f		        LD      (PORT0),A 
+052e f1			        POP     AF 
+052f c9			        RET 
+0530			 
+0530			;CLR - CLEAR THE VT SCREEN 
+0530			;ON ENTRY A HOLDS THE NUMBER OF LINES TO 
+0530			;CLEAR AND HL THE ADDRESS OF THE FIRST LINE 
+0530			;ON EXIT HL POINTS TO ONE PAST LAST CHARACTER 
+0530			 
+0530 11 18 00		CLR:    LD      DE,018H         ;INCR BETWEEN LINES 
+0533 06 28		CLR1:   LD      B,40            ;CHARS/LINE 
+0535 36 80		CLR2:   LD      (HL),BLANK      ;CLEAR A LINE 
+0537 23			        INC     HL 
+0538 10 fb		        DJNZ    CLR2 
+053a 3d			        DEC     A               ;ALL LINES DONE 
+053b c8			        RET     Z               ;YES 
+053c 19			        ADD     HL,DE           ;POINT TO NEXT LINE 
+053d 18 f4		        JR      CLR1 
+053f			 
+053f			;AOUT, PMTOUT AND CROUT OUTPUT TO THE VT SCREEN 
+053f			 
+053f f5			AOUT:   PUSH    AF              ;OUTPUT CR THEN A 
+0540 cd 4a 05		        CALL    CROUT 
+0543 f1			        POP     AF 
+0544 18 06		        JR      ..OUTC 
+0546			 
+0546 3e 3e		PMTOUT: LD      A,'>'           ;OUTPUT PROMPT 
+0548 18 02		        JR      ..OUTC          ;RETURNING VIA OUTC 
+054a			 
+054a 3e 0d		CROUT:  LD      A,CR            ;RETURN VIA OUTC 
+054c			..OUTC: 
+054c			 
+054c			;.OUTC - PUTS ONE CHARACTER TO SCREEN 
+054c			;CALLED VIA 'EMT OUTC' BY MONITOR 
+054c			;INTERPRETS DELETE, CR, FORM FEED AND TAB 
+054c			 
+054c e5			.OUTC:  PUSH    HL              ;SAVE ALL 
+054d d5			        PUSH    DE 
+054e c5			        PUSH    BC 
+054f f5			        PUSH    AF 
+0550			        EMT     OPNWT           ;### 
+0550 f7			        RST 30H 
+0551 0b			        DEFB OPNWT 
+0552			        endm 
+# End of macro EMT
+0552 2a 05 40		        LD      HL,(VTPTR)      ;HL <- CURRENT POS 
+0555 36 80		        LD      (HL),BLANK      ;CURSOR OFF 
+0557 11 8f 05		        LD      DE,SCRL         ;ELSE RET VIA SCRL 
+055a d5			        PUSH    DE 
+055b			 
+055b fe 7f		        CP      DELETE          ;IF DELETE 
+055d 20 06		        JR      NZ,OUTC1 
+055f 3e c0		        LD      A,0C0H              ;ANY CHARS? 
+0561 bd			        CP      L 
+0562 d0			        RET     NC                  ;NO--IGNORE 
+0563 2b			        DEC     HL                  ;YES--DEC PTR 
+0564 c9			        RET 
+0565			 
+0565 fe 20		OUTC1:  CP      20H             ;ELSE IF NOT CONTR CHAR 
+0567 38 08		        JR      C,OUTC2 
+0569 fe 4f		        CP      'O'                 ;SWITCH 'O' 
+056b 20 01		        JR      NZ,OUTC1A 
+056d af			        XOR     A 
+056e 77			OUTC1A: LD      (HL),A              ;DISPLAY IT 
+056f 23			        INC     HL                  ;AND INC PTR 
+0570 c9			        RET 
+0571			 
+0571 d6 0d		OUTC2:  SUB     CR              ;ELSE IF CARR RET 
+0573 20 03		        JR      NZ,OUTC3 
+0575 2e e8		        LD      L,0E8H              ;FORCE A SCROLL 
+0577 c9			        RET 
+0578			 
+0578 3c			OUTC3:  INC     A               ;ELSE IF FORM FEED 
+0579 20 08		        JR      NZ,OUTC5 
+057b 3a 00 40		        LD      A,(NLINES)          ;CLEAR SCROLLING SCREEN 
+057e 2a 01 40		        LD      HL,(TOP) 
+0581 18 ad		        JR      CLR 
+0583			 
+0583			; OUTC4: COULD BE VERTICAL TAB 
+0583			 
+0583 c6 03		OUTC5:  ADD     A,3             ;ELSE IF NOT HOR TAB 
+0585 c0			        RET     NZ                  ;IGNORE 
+0586 7d			        LD      A,L             ;GET LAST TAB POS 
+0587 e6 f8		        AND     0F8H 
+0589 6f			        LD      L,A 
+058a 01 08 00		        LD      BC,8            ;BUMP BY 8 
+058d 09			        ADD     HL,BC 
+058e c9			        RET 
+058f			 
+058f			;SCRL - SCROLL THE VT SCREEN IF NECESSARY, CLEARING 
+058f			;LAST LINE, THEN RESTORE CURSOR AND UPDATE POINTER 
+058f			 
+058f 3e e8		SCRL:   LD      A,0E8H 
+0591 bd			        CP      L               ;OFF THE END? 
+0592 20 2e		        JR      NZ,CURON        ;NO 
+0594			 
+0594 3a 00 40		        LD      A,(NLINES) 
+0597 3d			        DEC     A               ;A <- LINES TO SCROLL 
+0598 2a 01 40		        LD      HL,(TOP) 
+059b eb			        EX      DE,HL           ;DE <- ADDR OF TOP LINE 
+059c 21 40 00		        LD      HL,40H 
+059f 19			        ADD     HL,DE           ;HL <- ADDR OF NEXT LINE 
+05a0 01 28 00		SCRL1:  LD      BC,40           ;BC <- LINE LENGTH 
+05a3 ed b0		        LDIR 
+05a5 3d			        DEC     A 
+05a6 28 10		        JR      Z,CLAST         ;DONE? 
+05a8 01 18 00		        LD      BC,18H          ;NO 
+05ab 09			        ADD     HL,BC           ;ADVANCE POINTERS TO NEXT 
+05ac eb			        EX      DE,HL 
+05ad 09			        ADD     HL,BC 
+05ae eb			        EX      DE,HL 
+05af f5			        PUSH    AF 
+05b0 e6 07		        AND     7               ;###PAUSE EVERY 8 
+05b2 cc ff 04		        CALL    Z,CLSOPN        ;### 
+05b5 f1			        POP     AF 
+05b6 18 e8		        JR      SCRL1 
+05b8			 
+05b8 3e c0		CLAST:  LD      A,0C0H          ;A <- START OF LAST 
+05ba bd			        CP      L               ;DONE? 
+05bb 28 05		        JR      Z,CURON         ;YES 
+05bd 2b			        DEC     HL 
+05be 36 80		        LD      (HL),BLANK 
+05c0 18 f8		        JR      CLAST+2 
+05c2			 
+05c2 36 7f		CURON:  LD      (HL),CURSOR 
+05c4 22 05 40		        LD      (VTPTR),HL 
+05c7			        EMT     CLOSE           ;### 
+05c7 f7			        RST 30H 
+05c8 0c			        DEFB CLOSE 
+05c9			        endm 
+# End of macro EMT
+05c9 f1			RET1:   POP     AF              ;STANDARD EXITS 
+05ca c1			RET2:   POP     BC 
+05cb d1			        POP     DE 
+05cc e1			        POP     HL 
+05cd c9			        RET 
+05ce			 
+05ce			;MOUT - OUTPUT CR, THEN STRING, USING .MSG 
+05ce			;  REG A LOST, OTHERS PRESERVED 
+05ce			 
+05ce 21 13 00		ERROUT: LD      HL,MSGE 
+05d1			 
+05d1 cd 4a 05		MOUT:   CALL    CROUT 
+05d4			 
+05d4			;.MSG - FAST STRING OUTPUT TO VT SCROLLER 
+05d4			;  ENTER WITH (HL) -> STRING 
+05d4			;  END OF STRING (EOS) IS A -VE BYTE 
+05d4			;  ALL REGISTERS PRESERVED 
+05d4			 
+05d4 e5			.MSG:   PUSH    HL              ;STANDARD SAVE SEQUENCE 
+05d5 d5			        PUSH    DE 
+05d6 c5			        PUSH    BC 
+05d7 f5			        PUSH    AF 
+05d8 ed 5b 05 40	        LD      DE,(VTPTR) 
+05dc			        EMT     OPNWT           ;### 
+05dc f7			        RST 30H 
+05dd 0b			        DEFB OPNWT 
+05de			        endm 
+# End of macro EMT
+05de ed a0		.MSG1:  LDI                     ;CAN ALWAYS MOVE ONE CHAR 
+05e0 cb 7e		        BIT     7,(HL)          ;REACHED END OF STRING? 
+05e2 28 fa		        JR      Z,.MSG1         ;CONTINUE IF NOT 
+05e4 eb			        EX      DE,HL           ;USE SCROLLER TO REPLACE 
+05e5 18 a8		        JR      SCRL            ;CURSOR, DO CR IF NEEDED 
+05e7			 
+05e7			;FSTLST - PROMPT FOR 'FIRST' ADDR AND 'LAST' ADDR 
+05e7			;ON RETURN, DE = FIRST, BC = LAST AND HL = (LAST - FIRST) 
+05e7			;ERROR IF FIRST > LAST 
+05e7			 
+05e7 21 1b 00		FSTLST: LD      HL,MSGF         ;GET 'FIRST' 
+05ea			        CALR    MGTHEX 
+05ea ef			        RST 28H 
+05eb 11			        DEFB MGTHEX-$-1 
+05ec			        endm 
+# End of macro CALR
+05ec eb			        EX      DE,HL           ;DE <- FIRST 
+05ed 21 2b 00		        LD      HL,MSGL         ;GET 'LAST' 
+05f0			        CALR    MGTHEX 
+05f0 ef			        RST 28H 
+05f1 0b			        DEFB MGTHEX-$-1 
+05f2			        endm 
+# End of macro CALR
+05f2 44			        LD      B,H             ;BC <- LAST 
+05f3 4d			        LD      C,L 
+05f4 b7			        OR      A               ;TEST IF VALID, CLR CY 
+05f5 ed 52		        SBC     HL,DE 
+05f7 d0			        RET     NC              ;WITH HL = LAST - FIRST 
+05f8			 
+05f8			;ERROR - ISSUE ERROR MESSAGE AND RESTART 
+05f8			 
+05f8 cd ce 05		ERROR:  CALL    ERROUT 
+05fb			        EMT     0               ;AND RESET STACK 
+05fb f7			        RST 30H 
+05fc 00			        DEFB 0 
+05fd			        endm 
+# End of macro EMT
+05fd			 
+05fd			;GETHEX - GETS HEX VALUE FROM KEYBOARD 
+05fd			;ON RETURN HL CONTAINS VALUE, C CONTAINS NUMBER 
+05fd			;OF HEX CHARS, B CONTAINS TERMINATOR AND DE IS 
+05fd			;UNCHANGED.  INTERPRETS DELETE. 
+05fd			 
+05fd cd d1 05		MGTHEX: CALL    MOUT            ;OUTPUT CR, THEN STR > 
+0600 18 03		        JR      PGTHEX 
+0602			 
+0602 cd 4a 05		CGTHEX: CALL    CROUT           ;OUTPUT CR, > 
+0605			 
+0605 cd 46 05		PGTHEX: CALL    PMTOUT          ;OUTPUT PROMPT 
+0608			 
+0608 21 00 00		.GTHEX: LD      HL,0            ;CLEAR BUFFER AND 
+060b 4d			        LD      C,L             ;CHAR COUNTER 
+060c			NXTC:   EMT     KBDIN           ;GET A CHAR 
+060c f7			        RST 30H 
+060d 02			        DEFB KBDIN 
+060e			        endm 
+# End of macro EMT
+060e 28 fc		        JR      Z,NXTC 
+0610 47			        LD      B,A             ;SAVE LAST IN B 
+0611 fe 30		        CP      '0'             ;CONTROL CHAR? 
+0613 d8			        RET     C               ;YES--RETURN 
+0614 fe 7f		        CP      DELETE          ;IF DELETE 
+0616 28 1e		        JR      Z,NXTC2         ;DELETE LAST DIG (IF ANY) 
+0618			        EMT     OUTC            ;ECHO PRINTING CHAR 
+0618 f7			        RST 30H 
+0619 16			        DEFB OUTC 
+061a			        endm 
+# End of macro EMT
+061a d6 30		        SUB     '0'             ;CONVERT TO HEX 
+061c fe 0a		        CP      10              ;0 TO 9? 
+061e 38 08		        JR      C,NXTC1         ;YES 
+0620 d6 07		        SUB     7 
+0622 fe 0a		        CP      0AH             ;LESS THEN A? 
+0624 d8			        RET     C               ;YES--RETURN 
+0625 fe 10		        CP      10H             ;MORE THAN F? 
+0627 d0			        RET     NC              ;YES 
+0628			 
+0628 29			NXTC1:  ADD     HL,HL           ;SHIFT LEFT 4 
+0629 29			        ADD     HL,HL 
+062a 29			        ADD     HL,HL 
+062b 29			        ADD     HL,HL 
+062c b5			        OR      L               ;MERGE NEW 
+062d 6f			        LD      L,A 
+062e 3e 03		        LD      A,3             ;HAVE THERE BEEN 4 CHARS? 
+0630 b9			        CP      C 
+0631 38 12		        JR      C,NXTC4         ;IF C > 3 
+0633 0c			        INC     C               ;ELSE BUMP CHAR COUNT 
+0634 18 d6		        JR      NXTC 
+0636			 
+0636 0c			NXTC2:  INC     C               ;DELETE, TEST IF ANY CHARS 
+0637 0d			        DEC     C 
+0638 28 d2		        JR      Z,NXTC          ;Z IF NONE 
+063a 06 04		        LD      B,4             ;SHIFT RIGHT 4 
+063c cb 3c		NXTC3:  SRL     H 
+063e cb 1d		        RR      L 
+0640 10 fa		        DJNZ    NXTC3 
+0642 0d			        DEC     C               ;DEC COUNT 
+0643 18 0e		        JR      NXTC5           ;ECHO DELETE 
+0645			 
+0645 d5			NXTC4:  PUSH    DE              ;5 CHARS, SAVE DE 
+0646 eb			        EX      DE,HL           ;DE <- HEX VALUE 
+0647 2a 05 40		        LD      HL,(VTPTR)      ;HL <- ADDR OF CURSOR 
+064a 7d			        LD      A,L 
+064b d6 05		        SUB     5 
+064d 6f			        LD      L,A             ;HL <- ADDR OF START OF STR 
+064e cd 8d 06		        CALL    DEOUTW          ;DISPLAY TRUE 4 CHAR STR 
+0651 eb			        EX      DE,HL           ;HL <- HEX VALUE 
+0652 d1			        POP     DE              ;RESTORE DE 
+0653			 
+0653 3e 7f		NXTC5:  LD      A,DELETE        ;DELETE FIFTH CHAR 
+0655			        EMT     OUTC 
+0655 f7			        RST 30H 
+0656 16			        DEFB OUTC 
+0657			        endm 
+# End of macro EMT
+0657 18 b3		        JR      NXTC 
+0659			 
+0659			;GETNAM - GET NAME FROM KBD, HANDLE DELETE 
+0659			 
+0659 21 d6 07		GETNAM: LD      HL,MSGN         ;OUTPUT CR NAME> 
+065c cd d1 05		        CALL    MOUT 
+065f cd 46 05		        CALL    PMTOUT 
+0662 06 06		        LD      B,6 
+0664 21 45 40		        LD      HL,NAME         ;HL <- BUFFER ADDR 
+0667 cd cd 00		NM1:    CALL    GETC            ;GET A CHAR 
+066a fe 30		        CP      '0' 
+066c 38 0a		        JR      C,NM2 
+066e fe 7f		        CP      DELETE 
+0670 28 0e		        JR      Z,NM4 
+0672			        EMT     OUTC            ;ECHO CHAR 
+0672 f7			        RST 30H 
+0673 16			        DEFB OUTC 
+0674			        endm 
+# End of macro EMT
+0674 77			        LD      (HL),A          ;SAVE IT IN BUF 
+0675 23			        INC     HL 
+0676 10 ef		        DJNZ    NM1             ;GET UP TO 6 CHARS 
+0678 04			NM2:    INC     B               ;WHILE (B != 0) 
+0679 05			NM3:    DEC     B 
+067a c8			        RET     Z 
+067b 36 20		        LD      (HL),' '        ;PAD WITH SPACE (NOT GRAPHICS BLANK) 
+067d 23			        INC     HL 
+067e 18 f9		        JR      NM3 
+0680 78			NM4:    LD      A,B             ;TEST IF ANY CHARS 
+0681 fe 06		        CP      6 
+0683 28 e2		        JR      Z,NM1           ;Z IF NONE 
+0685 04			        INC     B               ;ELSE UPDATE CHAR 
+0686 2b			        DEC     HL              ;AND DELETE CHAR FROM BUF 
+0687 3e 7f		        LD      A,DELETE        ;ECHO DELETE 
+0689			        EMT     OUTC 
+0689 f7			        RST 30H 
+068a 16			        DEFB OUTC 
+068b			        endm 
+# End of macro EMT
+068b 18 da		        JR      NM1 
+068d			 
+068d			;HL IS SCREEN ADDRESS 
+068d			 
+068d			;DEOUTW - DEOUT WHEN VT IS CLOSED 
+068d			;DEOUTC - DEOUT, THEN CLOSE 
+068d			 
+068d			DEOUTW: EMT     OPNWT           ;### 
+068d f7			        RST 30H 
+068e 0b			        DEFB OPNWT 
+068f			        endm 
+# End of macro EMT
+068f			DEOUTC: EMT     DEOUT 
+068f f7			        RST 30H 
+0690 14			        DEFB DEOUT 
+0691			        endm 
+# End of macro EMT
+0691			        EMT     CLOSE           ;### 
+0691 f7			        RST 30H 
+0692 0c			        DEFB CLOSE 
+0693			        endm 
+# End of macro EMT
+0693 c9			        RET 
+0694			 
+0694			;.DEOUT - PUTS 4 HEX CHARS FROM DE 
+0694			 
+0694 7a			.DEOUT: LD      A,D 
+0695 cd 99 06		        CALL    .BYTEO 
+0698 7b			        LD      A,E 
+0699			 
+0699			;.BYTEO - PUTS 2 HEX CHARS FROM A 
+0699			 
+0699 f5			.BYTEO: PUSH    AF 
+069a 0f			        RRCA                    ;GET UPPER 4 BITS 
+069b 0f			        RRCA 
+069c 0f			        RRCA 
+069d 0f			        RRCA 
+069e cd a2 06		        CALL    HEXO 
+06a1 f1			        POP     AF 
+06a2			 
+06a2			;HEXO - PUTS LOWER 4 BITS OF A IN HEX 
+06a2			 
+06a2 e6 0f		HEXO:   AND     0FH             ;MASK TO 4 BITS 
+06a4 c6 90		        ADD     A,90H           ;CONVERT TO HEX 
+06a6 27			        DAA 
+06a7 ce 40		        ADC     A,40H 
+06a9 27			        DAA 
+06aa 77			CHO:    LD      (HL),A          ;PUT OUT CHARACTER 
+06ab 23			        INC     HL              ;BUMP POINTER 
+06ac c9			        RET 
+06ad			 
+06ad			 
+06ad			;.GTBYT - GETS NEXT BYTE FROM TAPE INTO A 
+06ad			;CALLED VIA EMT 
+06ad			 
+06ad e5			.GTBYT: PUSH    HL              ;SAVE ALL BUT A 
+06ae d5			        PUSH    DE 
+06af c5			        PUSH    BC 
+06b0 cd fb 06		        CALL    GETCYC 
+06b3 af			        XOR     A 
+06b4 57			        LD      D,A 
+06b5 3d			        DEC     A 
+06b6 5f			        LD      E,A 
+06b7			 
+06b7 cb 5b		GB1:    BIT     3,E 
+06b9 20 01		        JR      NZ,GB2 
+06bb 15			        DEC     D 
+06bc cd fb 06		GB2:    CALL    GETCYC 
+06bf 38 01		        JR      C,GB3 
+06c1 14			        INC     D 
+06c2 cb 13		GB3:    RL      E 
+06c4 3e 01		        LD      A,1 
+06c6 ba			        CP      D 
+06c7 30 ee		        JR      NC,GB1 
+06c9			 
+06c9 cb 5b		        BIT     3,E 
+06cb 28 0c		        JR      Z,GB4 
+06cd cd fb 06		        CALL    GETCYC 
+06d0 cb 13		        RL      E 
+06d2 cb 5b		        BIT     3,E 
+06d4 28 03		        JR      Z,GB4 
+06d6 cd fb 06		        CALL    GETCYC 
+06d9 06 08		GB4:    LD      B,8 
+06db 50			        LD      D,B 
+06dc			 
+06dc 1e 00		GB5:    LD      E,0 
+06de 3e f8		        LD      A,-8 
+06e0 82			        ADD     A,D 
+06e1 57			        LD      D,A 
+06e2			 
+06e2 cd fb 06		GB6:    CALL    GETCYC 
+06e5 14			        INC     D 
+06e6 1c			        INC     E 
+06e7 38 02		        JR      C,GB7 
+06e9 14			        INC     D 
+06ea 1d			        DEC     E 
+06eb 3e 07		GB7:    LD      A,7 
+06ed ba			        CP      D 
+06ee 30 f2		        JR      NC,GB6 
+06f0			 
+06f0 3e 03		        LD      A,3 
+06f2 bb			        CP      E 
+06f3 cb 19		        RR      C 
+06f5 10 e5		        DJNZ    GB5 
+06f7			 
+06f7 79			        LD      A,C 
+06f8 c3 ca 05		        JP      RET2            ;STANDARD EXIT 
+06fb			 
+06fb			;GETCYC - TIME A CYCLE FROM TAPE 
+06fb			;/ALLOW ESCAPE BY CTRL C 
+06fb			 
+06fb 21 fe 0f		GETCYC: LD      HL,PORT1 
+06fe cd e5 04		GC1:    CALL    .KBDIN          ;CHECK FOR CTRL C 
+0701 cb 6e		        BIT     TAPE,(HL) 
+0703 28 f9		        JR      Z,GC1 
+0705 cb 6e		        BIT     TAPE,(HL) 
+0707 28 f5		        JR      Z,GC1 
+0709 cb 6e		GC2:    BIT     TAPE,(HL) 
+070b 20 fc		        JR      NZ,GC2 
+070d cb 6e		        BIT     TAPE,(HL) 
+070f 20 f8		        JR      NZ,GC2 
+0711 cd 78 07		        CALL    RDCNT 
+0714 cd 8b 07		        CALL    RESCNT 
+0717 fe 47		        CP      VALUE 
+0719 c9			        RET 
+071a			 
+071a			;GETSYN - WAIT FOR START OF RECORD (TRAP ROUTINE) 
+071a			;CALLED WITH SOH IN A. WAITS FOR INTERRECORD GAP, 
+071a			;THEN SOH CHAR.  REGS UNCHANGED. 
+071a			 
+071a e5			.GTSYN: PUSH    HL              ;STANDARD SAVE 
+071b d5			        PUSH    DE 
+071c c5			        PUSH    BC 
+071d f5			        PUSH    AF 
+071e 4f			        LD      C,A             ;C <- SOH 
+071f cd 0d 40		GTSN1:  CALL    GETGAP          ;WAIT FOR GAP 
+0722			        EMT     GETBYT          ;READ FIRST CHAR 
+0722 f7			        RST 30H 
+0723 04			        DEFB GETBYT 
+0724			        endm 
+# End of macro EMT
+0724 b9			        CP      C               ;IS IT CORRECT? 
+0725 20 f8		        JR      NZ,GTSN1        ;NO--ASSUME A GLITCH 
+0727 18 1f		        JR      PBY2            ;STANDARD EXIT 
+0729			 
+0729			;.GTGAP - FIND INTER RECORD GAP (GAPLEN '1' CYCLES) 
+0729			;CALLED VIA GETGAP (RAM VECTOR) SO THAT IT CAN BE 
+0729			;SKIPPED FOR PAPER TAPE 
+0729			 
+0729 06 f0		.GTGAP: LD      B,GAPLEN-256    ;SET B TO # OF '1' CYCLES 
+072b cd fb 06		GG1:    CALL    GETCYC 
+072e 30 f9		        JR      NC,.GTGAP       ;RESET B IF A '0' CYCLE SEEN 
+0730 10 f9		        DJNZ    GG1             ;COUNT DOWN B '1' CYCLES 
+0732 c9			        RET 
+0733			 
+0733			;.PTBYT - OUTPUTS BYTE TO TAPE FROM A 
+0733			;CALLED VIA EMT 
+0733			 
+0733 e5			.PTBYT: PUSH    HL              ;SAVE ALL 
+0734 d5			        PUSH    DE 
+0735 c5			        PUSH    BC 
+0736 f5			        PUSH    AF 
+0737 2f			        CPL 
+0738 4f			        LD      C,A 
+0739 3e 01		        LD      A,1 
+073b			        CALR    PUTBIT 
+073b ef			        RST 28H 
+073c 0e			        DEFB PUTBIT-$-1 
+073d			        endm 
+# End of macro CALR
+073d 06 0a		        LD      B,10 
+073f			 
+073f cb 39		PBY1:   SRL     C 
+0741 17			        RLA 
+0742			        CALR    PUTBIT 
+0742 ef			        RST 28H 
+0743 07			        DEFB PUTBIT-$-1 
+0744			        endm 
+# End of macro CALR
+0744 10 f9		        DJNZ    PBY1 
+0746			 
+0746			        EMT     KBDIN 
+0746 f7			        RST 30H 
+0747 02			        DEFB KBDIN 
+0748			        endm 
+# End of macro EMT
+0748 c3 c9 05		PBY2:   JP      RET1            ;STANDARD EXIT 
+074b			 
+074b			;PUTBIT - PUT BIT 0 OF A TO TAPE 
+074b			 
+074b c5			PUTBIT: PUSH    BC 
+074c 21 03 40		        LD      HL,MASK 
+074f 06 04		        LD      B,4 
+0751 e6 03		        AND     11B 
+0753 28 1f		        JR      Z,PBT4 
+0755 fe 03		        CP      11B 
+0757 28 1b		        JR      Z,PBT4 
+0759 cb a6		        RES     FREQ,(HL) 
+075b fe 01		        CP      01B 
+075d 28 02		        JR      Z,PBT1 
+075f cb e6		        SET     FREQ,(HL) 
+0761			 
+0761 f5			PBT1:   PUSH    AF 
+0762 7e			        LD      A,(HL) 
+0763 11 fc 0f		        LD      DE,PORT0 
+0766 21 fe 0f		        LD      HL,PORT1 
+0769 cb 4e		PBT2:   BIT     CLK,(HL) 
+076b 28 fc		        JR      Z,PBT2 
+076d cb 4e		PBT3:   BIT     CLK,(HL) 
+076f 20 fc		        JR      NZ,PBT3 
+0771 12			        LD      (DE),A 
+0772 f1			        POP     AF 
+0773 05			        DEC     B 
+0774			 
+0774			PBT4:   EMT     EDGE 
+0774 f7			        RST 30H 
+0775 10			        DEFB EDGE 
+0776			        endm 
+# End of macro EMT
+0776 c1			        POP     BC 
+0777 c9			        RET 
+0778			 
+0778			;RDCNT - READ THE 8 USEC COUNTER INTO A (REGS PRESERVED) 
+0778			 
+0778 e5			RDCNT:  PUSH    HL 
+0779 c5			        PUSH    BC 
+077a 21 fd 0f		        LD      HL,CNTR 
+077d 46			        LD      B,(HL) 
+077e 7e			        LD      A,(HL) 
+077f 4e			        LD      C,(HL) 
+0780 66			        LD      H,(HL) 
+0781 b8			        CP      B 
+0782 28 04		        JR      Z,RC1 
+0784 b9			        CP      C 
+0785 28 01		        JR      Z,RC1 
+0787 7c			        LD      A,H 
+0788 c1			RC1:    POP     BC 
+0789 e1			        POP     HL 
+078a c9			        RET 
+078b			 
+078b			;RESCNT - CLEAR THE 8 USEC COUNTER (REGS PRESERVED) 
+078b			;(N.B. TO RETAIN TIMING, DOES NOT USE TRAP FOR 'UPDATE') 
+078b			 
+078b e5			RESCNT: PUSH    HL 
+078c 21 03 40		        LD      HL,MASK 
+078f cb f6		        SET     CLRCNT,(HL) 
+0791 cd 27 05		        CALL    .UPDAT 
+0794 cb b6		        RES     CLRCNT,(HL) 
+0796 cd 27 05		        CALL    .UPDAT 
+0799 e1			        POP     HL 
+079a c9			        RET 
+079b			 
+079b			;SEC5 - WAIT 5 SEC (DESTROYS B) 
+079b			 
+079b 06 32		SEC5:   LD      B,50            ;SET 50 * 100 MSEC 
+079d			 
+079d			;MS100 - WAIT FOR B 100 MSEC INTERVALS 
+079d			 
+079d c5			MS100:  PUSH    BC 
+079e 06 78		        LD      B,120           ;SET 120 * 1/1200 SEC 
+07a0			        EMT     EDGE 
+07a0 f7			        RST 30H 
+07a1 10			        DEFB EDGE 
+07a2			        endm 
+# End of macro EMT
+07a2 c1			        POP     BC 
+07a3 10 f8		        DJNZ    MS100 
+07a5 c9			        RET 
+07a6			 
+07a6			;EDGE - WAIT FOR B 1200 HZ EDGES 
+07a6			;       (ALSO USED AS 833 1/3 USEC TIMER) 
+07a6			 
+07a6 e5			.EDGE:  PUSH    HL 
+07a7 d5			        PUSH    DE 
+07a8 c5			        PUSH    BC 
+07a9 f5			        PUSH    AF 
+07aa 21 fe 0f		        LD      HL,PORT1 
+07ad cb 4e		ED1:    BIT     CLK,(HL)        ;WAIT FOR CLOCK HIGH 
+07af 28 fc		        JR      Z,ED1 
+07b1 cb 4e		ED2:    BIT     CLK,(HL)        ;WAIT FOR CLOCK LOW 
+07b3 20 fc		        JR      NZ,ED2 
+07b5 10 f6		        DJNZ    ED1 
+07b7 c3 c9 05		        JP      RET1 
+07ba			 
+07ba			 
+07ba			;DISPATCH TABLE FOR TRAP CODES 11 TO 24 
+07ba			 
+07ba			OPNWT:  EQU     11 
+07ba			CLOSE:  EQU     12 
+07ba			GRAFIX: EQU     13 
+07ba			SCROLL: EQU     14 
+07ba			CLEAR:  EQU     15 
+07ba			EDGE:   EQU     16 
+07ba			GETSYN: EQU     17 
+07ba			UPDATE: EQU     18 
+07ba			GETHEX: EQU     19 
+07ba			DEOUT:  EQU     20 
+07ba			BYTEO:  EQU     21 
+07ba			OUTC:   EQU     22 
+07ba			MSG:    EQU     23 
+07ba			CHAN:   EQU     24 
+07ba			 
+07ba 01 05		TRTBL:  DEFW    .OPNWT 
+07bc 1d 05		        DEFW    .CLOSE 
+07be 26 03		        DEFW    .GRAFX 
+07c0 1a 03		        DEFW    .SCROL 
+07c2 18 05		        DEFW    .CLEAR 
+07c4 a6 07		        DEFW    .EDGE 
+07c6 1a 07		        DEFW    .GTSYN 
+07c8 27 05		        DEFW    .UPDAT 
+07ca 08 06		        DEFW    .GTHEX 
+07cc 94 06		        DEFW    .DEOUT 
+07ce 99 06		        DEFW    .BYTEO 
+07d0 4c 05		        DEFW    .OUTC 
+07d2 d4 05		        DEFW    .MSG 
+07d4 6e 00		        DEFW    .CHAN 
+07d6			 
+07d6			;SYSTEM MESSAGES - THE MAJORITY OF THESE ARE INTERSPERSED 
+07d6			;WITH THE JUMPS TO THE 'RST' VECTORS 
+07d6			 
+07d6 ..			MSGN:   DEFM    'NAME' 
+07da ff			        DEFB    -1 
+07db ..			MSGV:   DEFM    'COS 2.3 BB'       ;VERSION NUMBER 
+07e5 ff			        DEFB    -1 
+07e6			 
+07e6			;INITBK - THIS THE INITIAL STATE OF RAM AND 
+07e6			;IS SET UP BY BEGIN ON RESET OR PARTIALLY BY CTRL C 
+07e6			 
+07e6 18			INITBK: DEFB    24              ;NLINES 
+07e7 00 08		        DEFW    0800H           ;TOP 
+07e9 92			        DEFB    MKINIT          ;MASK 
+07ea			CCLEN:  EQU     $-INITBK 
+07ea 00			        DEFB    0               ;SSFLG 
+07eb c0 0d		        DEFW    0DC0H           ;VTPTR 
+07ed 00 41		        DEFW    STACK           ;MPTR 
+07ef 10			        DEFB    16              ;RPTR 
+07f0 00			        DEFB    0               ;RSET 
+07f1 00 00		        DEFW    0               ;ADDR 
+07f3 c3 29 07		        JP      .GTGAP          ;GETGAP 
+07f6 c3 4c 05		        JP      .OUTC 
+07f9 c3 e5 04		        JP      .KBDIN          ;KBDIN 
+07fc c3 33 07		        JP      .PTBYT          ;PUTBYT 
+07ff c3 ad 06		        JP      .GTBYT          ;GETBYT 
+0802 c3 10 40		        JP      VTV             ;LP VECTOR 
+0805			INITLN: EQU     $-INITBK 
+0805			 
+0805 04			GRAFBK: DEFB    4               ;NLINES 
+0806 00 0d		        DEFW    0D00H           ;TOP 
+0808			 
+0808			MONEND: EQU     $-1 
+0808			MONLEN: EQU     MONEND-MONST+1 
+0808			 
+0808			;DEDICATED RAM FOR SYSTEM 
+0808			 
+0808			        ORG     RAM 
+4000			 
+4000 00...		NLINES: DEFS    1               ;LINES TO SCROLL 
+4001 00...		TOP:    DEFS    2               ;TOP OF SCROLLED AREA 
+4003 00...		MASK:   DEFS    1               ;PORT 0 MASK 
+4004 00...		SSFLG:  DEFS    1               ;SINGLE STEP FLAG 
+4005 00...		VTPTR:  DEFS    2               ;VT POINTER 
+4007 00...		MPTR:   DEFS    2               ;MEMORY POINTER 
+4009 00...		RPTR:   DEFS    1               ;REGISTER POINTER 
+400a 00...		RSET:   DEFS    1               ;STANDARD/ALT REG SWITCH 
+400b 00...		ADDR:   DEFS    2               ;USER COLD START ADDR 
+400d 00...		GETGAP: DEFS    3               ;GAP VECTOR (ALTER FOR PAPER TAPE) 
+4010			 
+4010			;TRANSFER VECTORS 
+4010			 
+4010			KBDIN:  EQU     2 
+4010			PUTBYT: EQU     3 
+4010			GETBYT: EQU     4 
+4010			 
+4010 00...		VTV:    DEFS    3               ;CONSOLE OUT 
+4013 00...		KBDV:   DEFS    3               ;CONSOLE IN 
+4016 00...		TOV:    DEFS    3               ;TAPE OUT 
+4019 00...		TIV:    DEFS    3               ;TAPE IN 
+401c 00...		LPV:    DEFS    3               ;LINE PRINTER OUT 
+401f			 
+401f			                                ;HERE DOWN INITIALISED TO '0FFH' 
+401f 00...		OUT1:   DEFS    3               ;AUX I/O, USED BY FILE SYSTEMS 
+4022 00...		OUT2:   DEFS    3 
+4025 00...		IN1:    DEFS    3 
+4028 00...		IN2:    DEFS    3 
+402b 00...		IN3:    DEFS    3 
+402e			 
+402e 00...		RST8:   DEFS    3               ;RESTART VECTORS 
+4031 00...		RST10:  DEFS    3 
+4034 00...		RST18:  DEFS    3 
+4037 00...		RST20:  DEFS    3 
+403a			 
+403a 00...		NMIX:   DEFS    3               ;NMI EXTENSION VECTOR 
+403d 00...		TRAPX:  DEFS    3               ;TRAP EXTENSION VECTOR 
+4040			FFLEN:  EQU     $-OUT1 
+4040 00...		MONX:   DEFS    3               ;MONITOR EXTENSION VECTOR 
+4043 00...		HIMEM:  DEFS    2               ;TOP OF RAM 
+4045			 
+4045			;GENERAL STORAGE (NOT INITIALISED) 
+4045			 
+4045 00...		NAME:   DEFS    6               ;TARGET FILE NAME 
+404b 00...		PATL:   DEFS    1               ;LENGTH OF PATTERN 
+404c 00...		PATN:   DEFS    1               ;START OF PATTERN 
+404d			 
+404d			STACK:  EQU     RAM+100H 
+404d			 
+404d			;PORT ADDRESSES 
+404d			 
+404d			KBD:    EQU     0FFCH 
+404d			PORT0:  EQU     0FFCH 
+404d			CNTR:   EQU     0FFDH 
+404d			PORT1:  EQU     0FFEH 
+404d			 
+404d			;PORT 0 BIT ALLOCATION 
+404d			 
+404d			MKINIT: EQU     10010010B       ;INITIAL STATE OF PORT 0 MASK 
+404d			PAGE:   EQU     7               ;MEMORY PAGE SWITCH (=1 FOR OFF) 
+404d			CLRCNT: EQU     6               ;CLEAR 8 USEC COUNTER 
+404d			RLY2:   EQU     5               ;RELAY 2 (=0 FOR CLOSED) 
+404d			FREQ:   EQU     4               ;SET 2400 HZ 
+404d			RLY1:   EQU     3               ;RELAY 1 (=0 FOR CLOSED) 
+404d			VTOPN:  EQU     2               ;OPEN VT MEMORY 
+404d			SINGLE: EQU     1               ;ENABLE SINGLE STEP (=0 FOR SET) 
+404d			CLRKBD: EQU     0               ;CLEAR KEYBOARD LATCH 
+404d			 
+404d			;PORT 1 BIT ALLOCATION 
+404d			 
+404d			LINE:   EQU     7               ;VT LINE WAVE FORM 
+404d			FRAME:  EQU     6               ;VT FRAME WAVE FORM 
+404d			TAPE:   EQU     5               ;CASSETTE SIGNAL SENSE 
+404d			VOL:    EQU     3               ;CASSETTE VOLUME SENSE 
+404d			RESET:  EQU     2               ;RESET BUTTON 
+404d			CLK:    EQU     1               ;1200 HZ CLOCK 
+404d			 
+404d			VALUE:  EQU     47H             ;TAPE CYCLE DISCRIMINATOR 
+404d			RECLEN: EQU     128             ;RECORD LENGTH IN BYTES 
+404d			GAP:    EQU     2               ;INTER REC GAP (100'S OF MSEC) 
+404d			GAPLEN: EQU     240             ;GAP TO FIND WHEN READING ('1' CYCLES) 
+404d			SOH:    EQU     01001101B       ;START OF RECORD (4DH) 
+404d			 
+404d			LF:     EQU     0AH 
+404d			FORM:   EQU     0CH 
+404d			CR:     EQU     0DH 
+404d			 
+404d			CTRLC:  EQU     3 
+404d			CTRLU:  EQU     15H 
+404d			CTRLZ:  EQU     1AH 
+404d			 
+404d			BLANK:  EQU     80H             ;GRAPHICS BLANK 
+404d			LARR:   EQU     5BH 
+404d			RARR:   EQU     5DH 
+404d			UPARR:  EQU     5EH 
+404d			DELETE: EQU     7FH 
+404d			CURSOR: EQU     7FH 
+404d			 
+404d			        END 
+# End of file bb-cos-rom-23.asm
+404d

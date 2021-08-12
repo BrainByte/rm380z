@@ -1,0 +1,1 @@
+z80dasm -l -a -t -g 0 -o file.asm file.bin
